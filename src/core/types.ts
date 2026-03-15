@@ -1,0 +1,225 @@
+// src/core/types.ts
+
+export type Provider = 'ollama' | 'claude' | 'openai' | 'groq';
+
+export interface ProviderConfig {
+  name: Provider;
+  displayName: string;
+  baseUrl: string;
+  defaultModel: string;
+  apiKey?: string;
+  color: string;
+  requiresKey: boolean;
+}
+
+export interface Message {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
+
+export interface ToolCall {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface ToolResult {
+  success: boolean;
+  output: string;
+  diff?: FileDiff;
+}
+
+export interface FileDiff {
+  path: string;
+  before: string;
+  after: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface Checkpoint {
+  id: string;
+  label: string;
+  timestamp: number;
+  messages: Message[];
+  files: Record<string, string>; // path -> content snapshots
+}
+
+export interface SessionState {
+  provider: Provider;
+  model: string;
+  messages: Message[];
+  checkpoints: Checkpoint[];
+  allowAllTools: boolean;
+  workingDir: string;
+  apiKeys: Partial<Record<Provider, string>>;
+}
+
+export interface SlashCommand {
+  name: string;          // e.g. "help"
+  trigger: string;       // e.g. "/help"
+  icon: string;          // emoji or ascii
+  description: string;   // short desc shown in picker
+  detail?: string;       // longer detail shown on highlight
+  usage?: string;        // usage example e.g. "/model claude-opus-4-5"
+  category: 'session' | 'context' | 'git' | 'tools' | 'providers';
+}
+
+export type NyxMood = 'idle' | 'thinking' | 'happy' | 'error' | 'waiting';
+
+export const PROVIDERS: Record<Provider, ProviderConfig> = {
+  ollama: {
+    name: 'ollama',
+    displayName: 'Ollama',
+    baseUrl: 'http://localhost:11434',
+    defaultModel: 'qwen2.5-coder:7b',
+    color: 'gray',
+    requiresKey: false,
+  },
+  claude: {
+    name: 'claude',
+    displayName: 'Claude',
+    baseUrl: 'https://api.anthropic.com',
+    defaultModel: 'claude-sonnet-4-5',
+    color: 'orange',
+    requiresKey: true,
+  },
+  openai: {
+    name: 'openai',
+    displayName: 'OpenAI',
+    baseUrl: 'https://api.openai.com',
+    defaultModel: 'gpt-4o',
+    color: 'green',
+    requiresKey: true,
+  },
+  groq: {
+    name: 'groq',
+    displayName: 'Groq',
+    baseUrl: 'https://api.groq.com/openai',
+    defaultModel: 'llama-3.3-70b-versatile',
+    color: 'red',
+    requiresKey: true,
+  },
+};
+
+export const SLASH_COMMANDS: SlashCommand[] = [
+  // ── Session ───────────────────────────────────────────────────────────────
+  {
+    name: 'clear',
+    trigger: '/clear',
+    icon: '✕',
+    description: 'Clear conversation history',
+    detail: 'Wipe the current conversation and start fresh. Checkpoints are preserved.',
+    category: 'session',
+  },
+  {
+    name: 'compact',
+    trigger: '/compact',
+    icon: '⊟',
+    description: 'Summarize & compress the conversation',
+    detail: 'Asks the model to summarize the full conversation, then replaces messages with that summary. Saves context window space.',
+    usage: '/compact',
+    category: 'session',
+  },
+  {
+    name: 'status',
+    trigger: '/status',
+    icon: '◎',
+    description: 'Show session status',
+    detail: 'Provider, model, API key status, message count, estimated tokens, checkpoint count, and working directory.',
+    usage: '/status',
+    category: 'session',
+  },
+  {
+    name: 'checkpoint',
+    trigger: '/checkpoint',
+    icon: '◉',
+    description: 'Save a checkpoint',
+    detail: 'Snapshot the conversation state so you can return to it later. Label is optional.',
+    usage: '/checkpoint before-refactor',
+    category: 'session',
+  },
+  {
+    name: 'restore',
+    trigger: '/restore',
+    icon: '↺',
+    description: 'Restore a checkpoint',
+    detail: 'List all saved checkpoints, or restore a specific one by ID.',
+    usage: '/restore  |  /restore <id>',
+    category: 'session',
+  },
+  {
+    name: 'exit',
+    trigger: '/exit',
+    icon: '⏻',
+    description: 'Exit LocalCode',
+    detail: 'Save session state and quit.',
+    category: 'session',
+  },
+  // ── Context ───────────────────────────────────────────────────────────────
+  {
+    name: 'context',
+    trigger: '/context',
+    icon: '@',
+    description: 'Add file or folder to context',
+    detail: 'Reads a file or lists a directory and injects it into the conversation. Also usable inline with @path syntax.',
+    usage: '/context src/app.ts  |  /context src/',
+    category: 'context',
+  },
+  {
+    name: 'diff',
+    trigger: '/diff',
+    icon: '±',
+    description: 'Show session file changes',
+    detail: 'Lists all files modified by tool calls in this session.',
+    usage: '/diff',
+    category: 'context',
+  },
+  // ── Git ───────────────────────────────────────────────────────────────────
+  {
+    name: 'commit',
+    trigger: '/commit',
+    icon: '⎇',
+    description: 'AI-generated git commit',
+    detail: 'Reads your staged diff and generates a conventional commit message. Nyx is added as co-author automatically.',
+    usage: '/commit',
+    category: 'git',
+  },
+  // ── Tools ─────────────────────────────────────────────────────────────────
+  {
+    name: 'allowall',
+    trigger: '/allowall',
+    icon: '✓',
+    description: 'Toggle permission prompts',
+    detail: 'When on, all tool calls (file writes, shell commands, patches) execute without asking. Toggle again to restore per-call prompts.',
+    usage: '/allowall',
+    category: 'tools',
+  },
+  // ── Providers ─────────────────────────────────────────────────────────────
+  {
+    name: 'provider',
+    trigger: '/provider',
+    icon: '◈',
+    description: 'Switch AI provider',
+    detail: 'List available providers, or switch to one. Switches model to the provider\'s default automatically.',
+    usage: '/provider  |  /provider claude  |  /provider ollama',
+    category: 'providers',
+  },
+  {
+    name: 'apikey',
+    trigger: '/apikey',
+    icon: '⚿',
+    description: 'Set API key for current provider',
+    detail: 'Stores a key for the active provider in memory. Keys can also be set via env: ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY.',
+    usage: '/apikey sk-ant-...',
+    category: 'providers',
+  },
+  {
+    name: 'model',
+    trigger: '/model',
+    icon: '⊞',
+    description: 'Change model',
+    detail: 'Switch to any model supported by the active provider.',
+    usage: '/model claude-opus-4-5  |  /model qwen2.5-coder:7b',
+    category: 'providers',
+  },
+];
