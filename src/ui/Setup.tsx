@@ -138,7 +138,7 @@ export function Setup({ onComplete }: SetupProps): React.ReactElement {
         </Box>
         <Box flexDirection="column" justifyContent="center">
           <Text bold color="yellowBright">LocalCode</Text>
-          <Text color="gray" dimColor>v2.1 · @localcode/cli</Text>
+          <Text color="gray" dimColor>v2.3 · @localcode/cli</Text>
           <Text color="gray" dimColor>by TheAlxLabs · co-piloted by Nyx</Text>
         </Box>
       </Box>

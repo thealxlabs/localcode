@@ -261,12 +261,12 @@ export const SLASH_COMMANDS = [
     },
     // ── Tools ─────────────────────────────────────────────────────────────────
     {
-        name: 'allowall',
-        trigger: '/allowall',
-        icon: '✓',
-        description: 'Toggle permission prompts',
-        detail: 'When on, all tool calls (file writes, shell commands, patches) execute without asking. Toggle again to restore per-call prompts.',
-        usage: '/allowall',
+        name: 'mcp',
+        trigger: '/mcp',
+        icon: '⬡',
+        description: 'Manage MCP servers',
+        detail: 'List, add, or remove MCP servers. Tools from connected servers are available to the agent automatically.',
+        usage: '/mcp list  |  /mcp add <n> stdio <cmd>  |  /mcp tools',
         category: 'tools',
     },
     // ── Providers ─────────────────────────────────────────────────────────────

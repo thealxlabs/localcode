@@ -60,7 +60,7 @@ export function NyxHeader({
         {/* Title + version */}
         <Box flexDirection="row" marginBottom={0}>
           <Text bold color="yellowBright">LocalCode</Text>
-          <Text color="gray" dimColor>  v2.1  @localcode/cli</Text>
+          <Text color="gray" dimColor>  v2.3  @localcode/cli</Text>
         </Box>
 
         {/* Provider + model */}

@@ -24,7 +24,7 @@ export function NyxHeader({ mood, provider, model, workingDir, tokenCount, allow
         React.createElement(Box, { flexDirection: "column", flexGrow: 1 },
             React.createElement(Box, { flexDirection: "row", marginBottom: 0 },
                 React.createElement(Text, { bold: true, color: "yellowBright" }, "LocalCode"),
-                React.createElement(Text, { color: "gray", dimColor: true }, "  v2.1  @localcode/cli")),
+                React.createElement(Text, { color: "gray", dimColor: true }, "  v2.3  @localcode/cli")),
             React.createElement(Box, { flexDirection: "row" },
                 React.createElement(Text, { color: "gray", dimColor: true }, "provider  "),
                 React.createElement(Text, { color: PROVIDER_COLORS[provider], bold: true }, providerConfig.displayName),

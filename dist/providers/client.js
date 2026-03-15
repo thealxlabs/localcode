@@ -1,16 +1,14 @@
 // src/providers/client.ts
-// Unified streaming client for Ollama, Claude, OpenAI, Groq
+// Unified streaming + agent loop client for Ollama, Claude, OpenAI, Groq
 import { PROVIDERS } from '../core/types.js';
-// ─── Tool definitions (sent to the model) ─────────────────────────────────────
-const TOOLS_DEFINITION = [
+// ─── Built-in tool definitions ─────────────────────────────────────────────────
+export const BUILTIN_TOOLS = [
     {
         name: 'read_file',
         description: 'Read the contents of a file',
         parameters: {
             type: 'object',
-            properties: {
-                path: { type: 'string', description: 'File path to read' },
-            },
+            properties: { path: { type: 'string', description: 'File path to read' } },
             required: ['path'],
         },
     },
@@ -75,249 +73,353 @@ const TOOLS_DEFINITION = [
         },
     },
 ];
-// ─── Ollama client ─────────────────────────────────────────────────────────────
-async function streamOllama(config, model, messages, onChunk) {
-    const res = await fetch(`${config.baseUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            model,
-            messages,
-            stream: true,
-            tools: TOOLS_DEFINITION,
-        }),
-    });
-    if (!res.ok || !res.body) {
-        const text = await res.text();
-        onChunk({ type: 'error', error: `Ollama error ${res.status}: ${text}` });
-        return;
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done)
-            break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-            if (!line.trim())
-                continue;
-            try {
-                const obj = JSON.parse(line);
-                const msg = obj.message;
-                if (!msg)
+// ─── Ollama agent ─────────────────────────────────────────────────────────────
+async function runOllamaAgent(config, model, messages, onChunk, agentCfg, systemPrompt) {
+    // Build message list with system prompt
+    const history = [];
+    if (systemPrompt)
+        history.push({ role: 'system', content: systemPrompt });
+    for (const m of messages)
+        history.push({ role: m.role, content: m.content });
+    const tools = agentCfg.tools.map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+    }));
+    for (let step = 0; step < agentCfg.maxSteps; step++) {
+        await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
+        const res = await fetch(`${config.baseUrl}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, messages: history, stream: true, tools }),
+        });
+        if (!res.ok || !res.body) {
+            await onChunk({ type: 'error', error: `Ollama error ${res.status}: ${await res.text()}` });
+            return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let assistantText = '';
+        const toolCalls = [];
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done)
+                break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() ?? '';
+            for (const line of lines) {
+                if (!line.trim())
                     continue;
-                if (msg.content) {
-                    onChunk({ type: 'text', text: msg.content });
-                }
-                if (msg.tool_calls) {
-                    for (const tc of msg.tool_calls) {
-                        onChunk({
-                            type: 'tool_call',
-                            toolCall: {
-                                name: tc.function.name,
-                                args: tc.function.arguments ?? {},
-                            },
-                        });
+                try {
+                    const obj = JSON.parse(line);
+                    const msg = obj.message;
+                    if (!msg)
+                        continue;
+                    if (msg.content) {
+                        assistantText += msg.content;
+                        await onChunk({ type: 'text', text: msg.content });
+                    }
+                    if (msg.tool_calls) {
+                        for (const tc of msg.tool_calls) {
+                            toolCalls.push({ name: tc.function.name, args: tc.function.arguments ?? {} });
+                        }
                     }
                 }
-                if (obj.done) {
-                    onChunk({ type: 'done' });
-                }
-            }
-            catch {
-                // Malformed JSON line — skip
+                catch { /* skip */ }
             }
         }
+        // Add assistant turn to history
+        history.push({ role: 'assistant', content: assistantText });
+        // No tool calls → agent is done
+        if (!toolCalls.length) {
+            await onChunk({ type: 'done' });
+            return;
+        }
+        // Execute tool calls
+        for (const toolCall of toolCalls) {
+            const perm = await agentCfg.onToolCall(toolCall, step);
+            if (!perm.allowed) {
+                history.push({ role: 'tool', content: `Tool call denied by user: ${toolCall.name}` });
+                continue;
+            }
+            const result = await agentCfg.executeTool(toolCall);
+            agentCfg.onToolResult(toolCall, result.output, result.diff);
+            // Feed result back
+            history.push({
+                role: 'tool',
+                content: result.output.slice(0, 8000),
+            });
+        }
     }
+    // Hit max steps
+    await onChunk({ type: 'error', error: `Agent reached max steps (${agentCfg.maxSteps}). Use /agent --steps N to increase.` });
 }
-// ─── Anthropic (Claude) client ────────────────────────────────────────────────
-async function streamClaude(config, model, messages, onChunk) {
-    const apiKey = config.apiKey;
-    if (!apiKey) {
-        onChunk({ type: 'error', error: 'No Anthropic API key set. Use /apikey sk-ant-...' });
+// ─── Claude agent ──────────────────────────────────────────────────────────────
+async function runClaudeAgent(config, model, messages, onChunk, agentCfg, systemPrompt) {
+    if (!config.apiKey) {
+        await onChunk({ type: 'error', error: 'No Anthropic API key. Use /apikey sk-ant-...' });
         return;
     }
-    // Convert tools to Anthropic format
-    const claudeTools = TOOLS_DEFINITION.map((t) => ({
+    const claudeTools = agentCfg.tools.map((t) => ({
         name: t.name,
         description: t.description,
         input_schema: t.parameters,
     }));
-    const res = await fetch(`${config.baseUrl}/v1/messages`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-            model,
-            max_tokens: 8096,
-            messages,
-            tools: claudeTools,
-            stream: true,
-        }),
-    });
-    if (!res.ok || !res.body) {
-        const text = await res.text();
-        onChunk({ type: 'error', error: `Claude error ${res.status}: ${text}` });
-        return;
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let currentToolName = '';
-    let currentToolInput = '';
-    let inToolUse = false;
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done)
-            break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-            if (line.startsWith('data: ')) {
-                const raw = line.slice(6).trim();
-                if (raw === '[DONE]') {
-                    onChunk({ type: 'done' });
+    const history = messages.map((m) => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content,
+    }));
+    for (let step = 0; step < agentCfg.maxSteps; step++) {
+        await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
+        const res = await fetch(`${config.baseUrl}/v1/messages`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': config.apiKey,
+                'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+                model,
+                max_tokens: 8096,
+                system: systemPrompt,
+                messages: history,
+                tools: claudeTools,
+                stream: true,
+            }),
+        });
+        if (!res.ok || !res.body) {
+            await onChunk({ type: 'error', error: `Claude error ${res.status}: ${await res.text()}` });
+            return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let assistantText = '';
+        const toolUses = [];
+        let currentToolId = '';
+        let currentToolName = '';
+        let currentToolInput = '';
+        let stopReason = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done)
+                break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() ?? '';
+            for (const line of lines) {
+                if (!line.startsWith('data: '))
                     continue;
-                }
+                const raw = line.slice(6).trim();
+                if (raw === '[DONE]')
+                    continue;
                 try {
                     const ev = JSON.parse(raw);
-                    if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
-                        inToolUse = true;
-                        currentToolName = ev.content_block.name;
-                        currentToolInput = '';
+                    if (ev.type === 'content_block_start') {
+                        if (ev.content_block?.type === 'tool_use') {
+                            currentToolId = ev.content_block.id;
+                            currentToolName = ev.content_block.name;
+                            currentToolInput = '';
+                        }
                     }
                     else if (ev.type === 'content_block_delta') {
-                        if (inToolUse && ev.delta?.type === 'input_json_delta') {
+                        if (ev.delta?.type === 'text_delta') {
+                            assistantText += ev.delta.text;
+                            await onChunk({ type: 'text', text: ev.delta.text });
+                        }
+                        else if (ev.delta?.type === 'input_json_delta') {
                             currentToolInput += ev.delta.partial_json ?? '';
                         }
-                        else if (ev.delta?.type === 'text_delta') {
-                            onChunk({ type: 'text', text: ev.delta.text });
-                        }
                     }
-                    else if (ev.type === 'content_block_stop' && inToolUse) {
-                        try {
-                            const args = JSON.parse(currentToolInput || '{}');
-                            onChunk({ type: 'tool_call', toolCall: { name: currentToolName, args } });
-                        }
-                        catch {
-                            onChunk({ type: 'tool_call', toolCall: { name: currentToolName, args: {} } });
-                        }
-                        inToolUse = false;
+                    else if (ev.type === 'content_block_stop' && currentToolName) {
+                        toolUses.push({ id: currentToolId, name: currentToolName, input: currentToolInput });
+                        currentToolName = '';
                     }
-                    else if (ev.type === 'message_stop') {
-                        onChunk({ type: 'done' });
+                    else if (ev.type === 'message_delta') {
+                        stopReason = ev.delta?.stop_reason ?? '';
                     }
                 }
-                catch {
-                    // skip
-                }
+                catch { /* skip */ }
             }
         }
-    }
-}
-// ─── OpenAI-compatible client (OpenAI + Groq) ────────────────────────────────
-async function streamOpenAICompat(baseUrl, apiKey, model, messages, onChunk, providerName) {
-    if (!apiKey) {
-        onChunk({ type: 'error', error: `No ${providerName} API key set. Use /apikey ...` });
-        return;
-    }
-    const openaiTools = TOOLS_DEFINITION.map((t) => ({
-        type: 'function',
-        function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-        },
-    }));
-    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-            model,
-            messages,
-            tools: openaiTools,
-            tool_choice: 'auto',
-            stream: true,
-        }),
-    });
-    if (!res.ok || !res.body) {
-        const text = await res.text();
-        onChunk({ type: 'error', error: `${providerName} error ${res.status}: ${text}` });
-        return;
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    // Track partial tool calls (can arrive across multiple chunks)
-    const toolCallAccumulators = {};
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done)
-            break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-            if (!line.startsWith('data: '))
-                continue;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') {
-                onChunk({ type: 'done' });
-                continue;
-            }
+        // Build assistant message content for history
+        const assistantContent = [];
+        if (assistantText)
+            assistantContent.push({ type: 'text', text: assistantText });
+        for (const tu of toolUses) {
             try {
-                const ev = JSON.parse(raw);
-                const delta = ev.choices?.[0]?.delta;
-                if (!delta)
-                    continue;
-                if (delta.content) {
-                    onChunk({ type: 'text', text: delta.content });
-                }
-                if (delta.tool_calls) {
-                    for (const tc of delta.tool_calls) {
-                        const idx = tc.index ?? 0;
-                        if (!toolCallAccumulators[idx]) {
-                            toolCallAccumulators[idx] = { name: tc.function?.name ?? '', args: '' };
-                        }
-                        if (tc.function?.name)
-                            toolCallAccumulators[idx].name = tc.function.name;
-                        if (tc.function?.arguments)
-                            toolCallAccumulators[idx].args += tc.function.arguments;
-                    }
-                }
-                // Flush complete tool calls when finish_reason is tool_calls
-                if (ev.choices?.[0]?.finish_reason === 'tool_calls') {
-                    for (const acc of Object.values(toolCallAccumulators)) {
-                        try {
-                            const args = JSON.parse(acc.args || '{}');
-                            onChunk({ type: 'tool_call', toolCall: { name: acc.name, args } });
-                        }
-                        catch {
-                            onChunk({ type: 'tool_call', toolCall: { name: acc.name, args: {} } });
-                        }
-                    }
-                    onChunk({ type: 'done' });
-                }
+                assistantContent.push({ type: 'tool_use', id: tu.id, name: tu.name, input: JSON.parse(tu.input || '{}') });
             }
             catch {
-                // skip
+                assistantContent.push({ type: 'tool_use', id: tu.id, name: tu.name, input: {} });
             }
         }
+        history.push({ role: 'assistant', content: assistantContent });
+        // No tool calls or end_turn → done
+        if (!toolUses.length || stopReason === 'end_turn') {
+            await onChunk({ type: 'done' });
+            return;
+        }
+        // Execute tools, build tool_result message
+        const toolResults = [];
+        for (const tu of toolUses) {
+            let parsedInput = {};
+            try {
+                parsedInput = JSON.parse(tu.input || '{}');
+            }
+            catch { /* ok */ }
+            const toolCall = { name: tu.name, args: parsedInput };
+            const perm = await agentCfg.onToolCall(toolCall, step);
+            let resultContent = 'Tool call denied by user.';
+            if (perm.allowed) {
+                const result = await agentCfg.executeTool(toolCall);
+                agentCfg.onToolResult(toolCall, result.output, result.diff);
+                resultContent = result.output.slice(0, 8000);
+            }
+            toolResults.push({
+                type: 'tool_result',
+                tool_use_id: tu.id,
+                content: resultContent,
+            });
+        }
+        history.push({ role: 'user', content: toolResults });
+    }
+    await onChunk({ type: 'error', error: `Agent reached max steps (${agentCfg.maxSteps}).` });
+}
+// ─── OpenAI-compatible agent (OpenAI + Groq) ─────────────────────────────────
+async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCfg, providerName, systemPrompt) {
+    if (!apiKey) {
+        await onChunk({ type: 'error', error: `No ${providerName} API key. Use /apikey ...` });
+        return;
+    }
+    const oaiTools = agentCfg.tools.map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+    }));
+    const history = [];
+    if (systemPrompt)
+        history.push({ role: 'system', content: systemPrompt });
+    for (const m of messages)
+        history.push({ role: m.role, content: m.content });
+    for (let step = 0; step < agentCfg.maxSteps; step++) {
+        await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
+        const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({ model, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
+        });
+        if (!res.ok || !res.body) {
+            await onChunk({ type: 'error', error: `${providerName} error ${res.status}: ${await res.text()}` });
+            return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let assistantText = '';
+        const tcAccum = {};
+        let finishReason = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done)
+                break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() ?? '';
+            for (const line of lines) {
+                if (!line.startsWith('data: '))
+                    continue;
+                const raw = line.slice(6).trim();
+                if (raw === '[DONE]')
+                    continue;
+                try {
+                    const ev = JSON.parse(raw);
+                    const delta = ev.choices?.[0]?.delta;
+                    finishReason = ev.choices?.[0]?.finish_reason ?? finishReason;
+                    if (!delta)
+                        continue;
+                    if (delta.content) {
+                        assistantText += delta.content;
+                        await onChunk({ type: 'text', text: delta.content });
+                    }
+                    if (delta.tool_calls) {
+                        for (const tc of delta.tool_calls) {
+                            const idx = tc.index ?? 0;
+                            if (!tcAccum[idx])
+                                tcAccum[idx] = { id: tc.id ?? '', name: '', args: '' };
+                            if (tc.id)
+                                tcAccum[idx].id = tc.id;
+                            if (tc.function?.name)
+                                tcAccum[idx].name += tc.function.name;
+                            if (tc.function?.arguments)
+                                tcAccum[idx].args += tc.function.arguments;
+                        }
+                    }
+                }
+                catch { /* skip */ }
+            }
+        }
+        const toolCalls = Object.values(tcAccum);
+        // Add assistant message to history
+        const assistantMsg = { role: 'assistant', content: assistantText || null };
+        if (toolCalls.length) {
+            assistantMsg.tool_calls = toolCalls.map((tc) => ({
+                id: tc.id,
+                type: 'function',
+                function: { name: tc.name, arguments: tc.args },
+            }));
+        }
+        history.push(assistantMsg);
+        // No tool calls → done
+        if (!toolCalls.length || finishReason === 'stop') {
+            await onChunk({ type: 'done' });
+            return;
+        }
+        // Execute tools
+        for (const tc of toolCalls) {
+            let args = {};
+            try {
+                args = JSON.parse(tc.args || '{}');
+            }
+            catch { /* ok */ }
+            const toolCall = { name: tc.name, args };
+            const perm = await agentCfg.onToolCall(toolCall, step);
+            let resultContent = 'Tool call denied by user.';
+            if (perm.allowed) {
+                const result = await agentCfg.executeTool(toolCall);
+                agentCfg.onToolResult(toolCall, result.output, result.diff);
+                resultContent = result.output.slice(0, 8000);
+            }
+            history.push({ role: 'tool', content: resultContent, tool_call_id: tc.id });
+        }
+    }
+    await onChunk({ type: 'error', error: `Agent reached max steps (${agentCfg.maxSteps}).` });
+}
+// ─── Public API ───────────────────────────────────────────────────────────────
+export async function runAgent(provider, apiKeys, model, messages, onChunk, agentCfg, systemPrompt) {
+    const config = { ...PROVIDERS[provider], apiKey: apiKeys[provider] };
+    switch (provider) {
+        case 'ollama':
+            return runOllamaAgent(config, model, messages, onChunk, agentCfg, systemPrompt);
+        case 'claude':
+            return runClaudeAgent(config, model, messages, onChunk, agentCfg, systemPrompt);
+        case 'openai':
+            return runOpenAIAgent(config.baseUrl, config.apiKey ?? '', model, messages, onChunk, agentCfg, 'OpenAI', systemPrompt);
+        case 'groq':
+            return runOpenAIAgent(config.baseUrl, config.apiKey ?? '', model, messages, onChunk, agentCfg, 'Groq', systemPrompt);
     }
 }
-// ─── Unified entrypoint ───────────────────────────────────────────────────────
-// ─── Token cost estimates (per 1M tokens, USD) ────────────────────────────────
+// Keep streamProvider as a simple single-turn wrapper (for /compact, /commit etc)
+export async function streamProvider(provider, apiKeys, model, messages, onChunk, systemPrompt) {
+    return runAgent(provider, apiKeys, model, messages, onChunk, {
+        maxSteps: 1,
+        tools: BUILTIN_TOOLS,
+        onToolCall: async () => ({ allowed: true, allowAll: false }),
+        onToolResult: () => { },
+        executeTool: async () => ({ success: false, output: 'Tool calls disabled in single-turn mode' }),
+    }, systemPrompt);
+}
+// ─── Token cost estimates ─────────────────────────────────────────────────────
 const COST_PER_1M = {
     'claude-sonnet-4-5': { in: 3, out: 15 },
     'claude-opus-4-5': { in: 15, out: 75 },
@@ -333,24 +435,6 @@ export function estimateCost(model, inputTokens, outputTokens) {
         return 0;
     return (inputTokens / 1_000_000) * rates.in + (outputTokens / 1_000_000) * rates.out;
 }
-export async function streamProvider(provider, apiKeys, model, messages, onChunk, systemPrompt) {
-    const config = { ...PROVIDERS[provider], apiKey: apiKeys[provider] };
-    // Prepend system prompt as first message if provided
-    const msgsWithSys = systemPrompt
-        ? [{ role: 'system', content: systemPrompt }, ...messages]
-        : messages;
-    switch (provider) {
-        case 'ollama':
-            return streamOllama(config, model, msgsWithSys, onChunk);
-        case 'claude':
-            return streamClaude(config, model, msgsWithSys, onChunk);
-        case 'openai':
-            return streamOpenAICompat(config.baseUrl, config.apiKey ?? '', model, msgsWithSys, onChunk, 'OpenAI');
-        case 'groq':
-            return streamOpenAICompat(config.baseUrl, config.apiKey ?? '', model, msgsWithSys, onChunk, 'Groq');
-    }
-}
-// ─── Model listing ─────────────────────────────────────────────────────────────
 export async function listModels(provider, apiKeys) {
     try {
         if (provider === 'ollama') {
@@ -385,12 +469,7 @@ export async function listModels(provider, apiKeys) {
             return data.data.map((m) => m.id).sort();
         }
         if (provider === 'claude') {
-            // Anthropic doesn't have a public list endpoint — return known models
-            return [
-                'claude-opus-4-5',
-                'claude-sonnet-4-5',
-                'claude-haiku-4-5-20251001',
-            ];
+            return ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5-20251001'];
         }
         return [];
     }

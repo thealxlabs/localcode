@@ -10,8 +10,9 @@ import { PROVIDERS, SLASH_COMMANDS, } from '../core/types.js';
 import { NyxHeader } from './NyxHeader.js';
 import { CommandPicker } from './CommandPicker.js';
 import { PermissionPrompt, needsPermission } from './PermissionPrompt.js';
-import { streamProvider, listModels, estimateCost } from '../providers/client.js';
+import { runAgent, streamProvider, listModels, estimateCost, BUILTIN_TOOLS } from '../providers/client.js';
 import { ToolExecutor } from '../tools/executor.js';
+import { McpManager } from '../mcp/manager.js';
 import { saveSession, createCheckpoint, restoreCheckpoint, estimateTokens, } from '../sessions/manager.js';
 export function App({ initialState }) {
     const { exit } = useApp();
@@ -29,6 +30,7 @@ export function App({ initialState }) {
     const [history, setHistory] = useState([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
     const executorRef = useRef(new ToolExecutor(initialState.workingDir));
+    const mcpRef = useRef(new McpManager());
     const streamingIdRef = useRef(null);
     // Compute filtered commands for picker
     const q = pickerQuery.toLowerCase();
@@ -499,6 +501,84 @@ export function App({ initialState }) {
                 }
                 return;
             }
+            case '/mcp': {
+                const subParts = args.split(/\s+/);
+                const sub = subParts[0]?.toLowerCase();
+                const mcpArgs = subParts.slice(1).join(' ');
+                if (!sub || sub === 'list') {
+                    const status = mcpRef.current.getStatus();
+                    if (!status.length) {
+                        sysMsg('No MCP servers configured.\n\nAdd one:\n  /mcp add <name> stdio <command> [args...]\n  /mcp add <name> http <url>');
+                    }
+                    else {
+                        const list = status
+                            .map((s) => `  ${s.connected ? '✓' : '✕'} ${s.name}  (${s.transport})  ${s.toolCount} tools`)
+                            .join('\n');
+                        sysMsg(`MCP servers:\n${list}\n\nTools: /mcp tools`);
+                    }
+                    return;
+                }
+                if (sub === 'tools') {
+                    const tools = mcpRef.current.getAllTools();
+                    if (!tools.length) {
+                        sysMsg('No MCP tools available. Connect a server first with /mcp add.');
+                        return;
+                    }
+                    const list = tools
+                        .map((t) => `  ${t.serverName}/${t.name}  —  ${t.description.slice(0, 60)}`)
+                        .join('\n');
+                    sysMsg(`MCP tools (${tools.length}):\n${list}`);
+                    return;
+                }
+                if (sub === 'add') {
+                    // /mcp add <name> stdio <command> [args...]
+                    // /mcp add <name> http <url>
+                    const [name, transport, ...rest] = mcpArgs.split(/\s+/);
+                    if (!name || !transport || !rest.length) {
+                        sysMsg('Usage:\n  /mcp add <name> stdio <command> [args...]\n  /mcp add <name> http <url>', true);
+                        return;
+                    }
+                    if (transport !== 'stdio' && transport !== 'http') {
+                        sysMsg(`Transport must be "stdio" or "http", got: ${transport}`, true);
+                        return;
+                    }
+                    sysMsg(`Connecting to MCP server "${name}"…`);
+                    setMood('thinking');
+                    const config = transport === 'stdio'
+                        ? { name, transport: 'stdio', command: rest[0], args: rest.slice(1) }
+                        : { name, transport: 'http', url: rest[0] };
+                    const err = await mcpRef.current.connect(config, (msg) => sysMsg(msg));
+                    if (!err) {
+                        const tools = mcpRef.current.getAllTools().filter((t) => t.serverName === name);
+                        sysMsg(`Connected! ${tools.length} tools available from "${name}".`);
+                        setMood('happy');
+                    }
+                    else {
+                        setMood('error');
+                    }
+                    return;
+                }
+                if (sub === 'remove' || sub === 'rm') {
+                    const name = mcpArgs.trim();
+                    if (!name) {
+                        sysMsg('Usage: /mcp remove <name>', true);
+                        return;
+                    }
+                    mcpRef.current.disconnect(name);
+                    sysMsg(`Removed MCP server "${name}".`);
+                    return;
+                }
+                if (sub === 'connect') {
+                    // Reconnect all saved servers
+                    sysMsg('Connecting to all saved MCP servers…');
+                    setMood('thinking');
+                    await mcpRef.current.connectAll((msg) => sysMsg(msg));
+                    setMood('idle');
+                    return;
+                }
+                sysMsg('MCP commands:\n  /mcp list          — show servers\n  /mcp tools         — show all tools\n  /mcp add <n> stdio <cmd>  — add stdio server\n  /mcp add <n> http <url>   — add HTTP server\n  /mcp remove <n>    — remove server\n  /mcp connect       — reconnect all saved servers');
+                return;
+            }
             case '/exit': {
                 saveSession(session);
                 exit();
@@ -541,13 +621,24 @@ export function App({ initialState }) {
         // We need the current session state
         const currentSession = session;
         const run = async () => {
-            // Build context: pinned items prepended as a system-style user message
             const pinnedMsg = currentSession.pinnedContext.length
                 ? [{ role: 'user', content: `[Pinned context — always relevant]\n${currentSession.pinnedContext.join('\n')}` }]
                 : [];
             const msgs = [...pinnedMsg, ...currentSession.messages, userMsg];
-            await streamProvider(currentSession.provider, currentSession.apiKeys, currentSession.model, msgs, async (chunk) => {
+            // Merge built-in tools with MCP tools
+            const mcpToolDefs = mcpRef.current.getToolDefinitions();
+            const allTools = [...BUILTIN_TOOLS, ...mcpToolDefs];
+            await runAgent(currentSession.provider, currentSession.apiKeys, currentSession.model, msgs, async (chunk) => {
                 switch (chunk.type) {
+                    case 'agent_step':
+                        if ((chunk.step ?? 0) > 0) {
+                            // Show step indicator after first iteration
+                            addDisplay({
+                                role: 'system',
+                                content: `⟳  Step ${(chunk.step ?? 0) + 1}/${chunk.maxSteps}`,
+                            });
+                        }
+                        break;
                     case 'text':
                         accumulated += chunk.text ?? '';
                         updateDisplay(streamId, { content: accumulated, streaming: true });
@@ -564,7 +655,6 @@ export function App({ initialState }) {
                             toolName: toolCall.name,
                             streaming: true,
                         });
-                        // Permission check
                         let allowed = currentSession.allowAllTools;
                         let allowAll = false;
                         if (!allowed && needsPermission(toolCall)) {
@@ -572,9 +662,8 @@ export function App({ initialState }) {
                             const perm = await requestPermission(toolCall);
                             allowed = perm.allowed;
                             allowAll = perm.allowAll;
-                            if (allowAll) {
+                            if (allowAll)
                                 setSession((s) => ({ ...s, allowAllTools: true }));
-                            }
                             setMood('thinking');
                         }
                         else {
@@ -582,28 +671,7 @@ export function App({ initialState }) {
                         }
                         if (!allowed) {
                             updateDisplay(toolDisplayId, { content: `${toolCall.name} — denied`, streaming: false, isError: true });
-                            break;
                         }
-                        // Execute
-                        const result = await executorRef.current.execute(toolCall);
-                        updateDisplay(toolDisplayId, {
-                            content: `${toolCall.name} → ${result.success ? result.output.slice(0, 120) : '✕ ' + result.output}`,
-                            streaming: false,
-                            isError: !result.success,
-                        });
-                        // Show diff if present
-                        if (result.diff) {
-                            addDisplay({
-                                role: 'system',
-                                content: `  ${result.diff.path}  +${result.diff.additions} -${result.diff.deletions}`,
-                            });
-                        }
-                        // Feed result back to model context
-                        const toolResultMsg = {
-                            role: 'user',
-                            content: `Tool result for ${toolCall.name}:\n${result.output.slice(0, 4000)}`,
-                        };
-                        msgs.push(toolResultMsg);
                         break;
                     }
                     case 'done':
@@ -618,7 +686,6 @@ export function App({ initialState }) {
                                     userMsg,
                                     { role: 'assistant', content: accumulated },
                                 ];
-                                // Auto-checkpoint every 20 messages
                                 const shouldCheckpoint = s.autoCheckpoint && newMessages.length % 20 === 0;
                                 const checkpoints = shouldCheckpoint
                                     ? [...s.checkpoints, {
@@ -629,9 +696,8 @@ export function App({ initialState }) {
                                             files: {},
                                         }]
                                     : s.checkpoints;
-                                if (shouldCheckpoint) {
-                                    setTimeout(() => sysMsg(`Auto-checkpoint saved at ${newMessages.length} messages.`), 100);
-                                }
+                                if (shouldCheckpoint)
+                                    setTimeout(() => sysMsg(`Auto-checkpoint saved.`), 100);
                                 return {
                                     ...s,
                                     messages: newMessages,
@@ -643,14 +709,45 @@ export function App({ initialState }) {
                         }
                         break;
                     case 'error':
-                        updateDisplay(streamId, {
-                            content: chunk.error ?? 'Unknown error',
-                            streaming: false,
-                            isError: true,
-                        });
+                        updateDisplay(streamId, { content: chunk.error ?? 'Unknown error', streaming: false, isError: true });
                         setMood('error');
                         break;
                 }
+            }, {
+                maxSteps: 20,
+                tools: allTools,
+                onToolCall: async (toolCall) => {
+                    if (!currentSession.allowAllTools && needsPermission(toolCall)) {
+                        setMood('waiting');
+                        const perm = await requestPermission(toolCall);
+                        if (perm.allowAll)
+                            setSession((s) => ({ ...s, allowAllTools: true }));
+                        setMood('thinking');
+                        return perm;
+                    }
+                    return { allowed: true, allowAll: false };
+                },
+                onToolResult: (toolCall, output, diff) => {
+                    const isMcp = mcpRef.current.isMcpTool(toolCall.name);
+                    addDisplay({
+                        role: 'tool',
+                        content: `${toolCall.name} → ${output.slice(0, 120)}`,
+                        toolName: toolCall.name,
+                        streaming: false,
+                    });
+                    if (diff && typeof diff === 'object' && 'additions' in diff) {
+                        const d = diff;
+                        addDisplay({ role: 'system', content: `  ${d.path}  +${d.additions} -${d.deletions}` });
+                    }
+                },
+                executeTool: async (toolCall) => {
+                    // Route MCP tools to MCP manager, built-in tools to executor
+                    if (mcpRef.current.isMcpTool(toolCall.name)) {
+                        const result = await mcpRef.current.callTool(toolCall.name, toolCall.args);
+                        return { success: result.success, output: result.output };
+                    }
+                    return executorRef.current.execute(toolCall);
+                },
             }, currentSession.systemPrompt);
         };
         try {

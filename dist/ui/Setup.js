@@ -123,7 +123,7 @@ export function Setup({ onComplete }) {
                     " ")),
             React.createElement(Box, { flexDirection: "column", justifyContent: "center" },
                 React.createElement(Text, { bold: true, color: "yellowBright" }, "LocalCode"),
-                React.createElement(Text, { color: "gray", dimColor: true }, "v2.1 \u00B7 @localcode/cli"),
+                React.createElement(Text, { color: "gray", dimColor: true }, "v2.3 \u00B7 @localcode/cli"),
                 React.createElement(Text, { color: "gray", dimColor: true }, "by TheAlxLabs \u00B7 co-piloted by Nyx"))),
         React.createElement(Box, { borderStyle: "single", borderColor: "gray", paddingX: 2, paddingY: 0, marginBottom: 1 },
             step === 'welcome' && (React.createElement(Box, { flexDirection: "column" },
