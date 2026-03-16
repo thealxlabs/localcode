@@ -67,6 +67,126 @@ function parseInline(raw: string): Segment[] {
   return segments.filter((s) => s.text.length > 0);
 }
 
+// ─── Syntax highlighting ──────────────────────────────────────────────────────
+
+const KEYWORDS: Record<string, Set<string>> = {
+  js: new Set(['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'import', 'export', 'from', 'async', 'await', 'new', 'this', 'typeof', 'instanceof', 'switch', 'case', 'break', 'continue', 'try', 'catch', 'finally', 'throw', 'delete', 'in', 'of', 'null', 'undefined', 'true', 'false']),
+  ts: new Set(['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'import', 'export', 'from', 'async', 'await', 'new', 'this', 'typeof', 'instanceof', 'switch', 'case', 'break', 'continue', 'try', 'catch', 'finally', 'throw', 'interface', 'type', 'enum', 'extends', 'implements', 'readonly', 'public', 'private', 'protected', 'static', 'abstract', 'null', 'undefined', 'true', 'false']),
+  python: new Set(['def', 'class', 'return', 'import', 'from', 'if', 'elif', 'else', 'for', 'while', 'with', 'as', 'try', 'except', 'finally', 'pass', 'lambda', 'yield', 'in', 'not', 'and', 'or', 'is', 'None', 'True', 'False', 'raise', 'del', 'global', 'nonlocal', 'assert', 'async', 'await']),
+  rust: new Set(['fn', 'let', 'mut', 'struct', 'enum', 'impl', 'pub', 'use', 'mod', 'match', 'if', 'else', 'for', 'while', 'loop', 'return', 'self', 'Self', 'super', 'crate', 'type', 'trait', 'where', 'unsafe', 'async', 'await', 'move', 'ref', 'true', 'false', 'None', 'Some', 'Ok', 'Err']),
+  go: new Set(['func', 'var', 'const', 'type', 'struct', 'interface', 'map', 'chan', 'go', 'defer', 'if', 'else', 'for', 'range', 'return', 'package', 'import', 'select', 'switch', 'case', 'default', 'break', 'continue', 'goto', 'fallthrough', 'nil', 'true', 'false']),
+};
+
+// Normalize language aliases
+const LANG_ALIASES: Record<string, string> = {
+  javascript: 'js',
+  typescript: 'ts',
+  tsx: 'ts',
+  jsx: 'js',
+  py: 'python',
+  rs: 'rust',
+  golang: 'go',
+  sh: 'shell',
+  bash: 'shell',
+  zsh: 'shell',
+};
+
+interface CodeToken {
+  text: string;
+  color: string;
+  dim?: boolean;
+}
+
+function tokenizeLine(line: string, lang: string): CodeToken[] {
+  const normalLang = LANG_ALIASES[lang] ?? lang;
+  const keywords = KEYWORDS[normalLang];
+
+  // Comments
+  if (normalLang === 'python' || normalLang === 'shell' || normalLang === 'yaml' || normalLang === 'yml') {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('#')) {
+      return [{ text: line, color: 'gray', dim: true }];
+    }
+  }
+  if (normalLang === 'sql') {
+    if (line.trimStart().startsWith('--')) {
+      return [{ text: line, color: 'gray', dim: true }];
+    }
+  }
+  if (normalLang === 'js' || normalLang === 'ts' || normalLang === 'rust' || normalLang === 'go' || normalLang === 'java' || normalLang === 'c' || normalLang === 'cpp') {
+    if (line.trimStart().startsWith('//') || line.trimStart().startsWith('/*') || line.trimStart().startsWith('*')) {
+      return [{ text: line, color: 'gray', dim: true }];
+    }
+  }
+
+  if (!keywords) {
+    return [{ text: line, color: 'greenBright' }];
+  }
+
+  // Tokenize by word boundaries for keyword/string/number detection
+  const tokens: CodeToken[] = [];
+  let i = 0;
+  const chars = line;
+
+  while (i < chars.length) {
+    // String literals
+    if (chars[i] === '"' || chars[i] === "'" || chars[i] === '`') {
+      const quote = chars[i];
+      let j = i + 1;
+      while (j < chars.length && chars[j] !== quote) {
+        if (chars[j] === '\\') j++; // skip escaped char
+        j++;
+      }
+      tokens.push({ text: chars.slice(i, j + 1), color: 'greenBright' });
+      i = j + 1;
+      continue;
+    }
+
+    // Numbers
+    if (/[0-9]/.test(chars[i]) && (i === 0 || /\W/.test(chars[i - 1]))) {
+      let j = i;
+      while (j < chars.length && /[0-9._xXa-fA-FbBoO]/.test(chars[j])) j++;
+      tokens.push({ text: chars.slice(i, j), color: 'yellowBright' });
+      i = j;
+      continue;
+    }
+
+    // Words (potential keywords or identifiers)
+    if (/[a-zA-Z_$]/.test(chars[i])) {
+      let j = i;
+      while (j < chars.length && /[\w$]/.test(chars[j])) j++;
+      const word = chars.slice(i, j);
+      if (keywords.has(word)) {
+        tokens.push({ text: word, color: 'magentaBright' });
+      } else {
+        tokens.push({ text: word, color: 'greenBright' });
+      }
+      i = j;
+      continue;
+    }
+
+    // Punctuation / operators
+    tokens.push({ text: chars[i], color: 'white' });
+    i++;
+  }
+
+  return tokens;
+}
+
+function SyntaxLine({ line, lang }: { line: string; lang: string }): React.ReactElement {
+  const tokens = tokenizeLine(line, lang);
+  if (tokens.length === 1) {
+    return <Text color={tokens[0].color as any} dimColor={tokens[0].dim}>{tokens[0].text}</Text>;
+  }
+  return (
+    <Text>
+      {tokens.map((tok, i) => (
+        <Text key={i} color={tok.color as any} dimColor={tok.dim}>{tok.text}</Text>
+      ))}
+    </Text>
+  );
+}
+
 // ─── Inline text renderer ─────────────────────────────────────────────────────
 
 function InlineText({ text, baseColor = 'white' }: { text: string; baseColor?: string }): React.ReactElement {
@@ -109,14 +229,13 @@ export function MarkdownText({ content, baseColor = 'white', streaming = false }
 
     // ── Fenced code block ──────────────────────────────────────────────────
     if (line.trimStart().startsWith('```')) {
-      const lang = line.trimStart().slice(3).trim();
+      const lang = line.trimStart().slice(3).trim().toLowerCase();
       const codeLines: string[] = [];
       i++;
       while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
         codeLines.push(lines[i]);
         i++;
       }
-      const code = codeLines.join('\n');
       elements.push(
         <Box
           key={`cb-${i}`}
@@ -129,7 +248,12 @@ export function MarkdownText({ content, baseColor = 'white', streaming = false }
           {lang ? (
             <Text color="gray" dimColor>{lang}</Text>
           ) : null}
-          <Text color="greenBright">{code}</Text>
+          {lang
+            ? codeLines.map((cl, ci) => (
+                <SyntaxLine key={ci} line={cl} lang={lang} />
+              ))
+            : <Text color="greenBright">{codeLines.join('\n')}</Text>
+          }
         </Box>,
       );
       i++; // skip closing ```

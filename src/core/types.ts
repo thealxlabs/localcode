@@ -17,6 +17,7 @@ export interface ProviderConfig {
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  images?: Array<{ base64: string; mimeType: string }>;
 }
 
 export interface ToolCall {
@@ -51,6 +52,28 @@ export interface Persona {
   prompt: string;
 }
 
+// ── Theme system ─────────────────────────────────────────────────────────────
+
+export type ThemeName = 'dark' | 'nord' | 'monokai' | 'light';
+
+export interface Theme {
+  name: ThemeName;
+  primary: string;   // user prompt color
+  accent: string;    // assistant icon color
+  tool: string;      // tool message color
+  system: string;    // system message color
+  error: string;     // error color
+  border: string;    // input box border color
+  header: string;    // header art color
+}
+
+export const THEMES: Record<ThemeName, Theme> = {
+  dark:    { name: 'dark',    primary: 'yellowBright', accent: 'white',         tool: 'cyan',         system: 'gray', error: 'red', border: 'yellowBright', header: 'white' },
+  nord:    { name: 'nord',    primary: 'blueBright',   accent: 'cyanBright',    tool: 'cyan',         system: 'gray', error: 'red', border: 'blueBright',   header: 'cyanBright' },
+  monokai: { name: 'monokai', primary: 'greenBright',  accent: 'magentaBright', tool: 'yellowBright', system: 'gray', error: 'red', border: 'greenBright',  header: 'magentaBright' },
+  light:   { name: 'light',   primary: 'blue',         accent: 'black',         tool: 'cyan',         system: 'gray', error: 'red', border: 'blue',         header: 'blue' },
+};
+
 export interface SessionState {
   provider: Provider;
   model: string;
@@ -67,6 +90,7 @@ export interface SessionState {
   maxSteps: number;               // max agent tool-call iterations per response
   sessionCost: number;            // estimated USD cost this session
   lastAssistantMessage: string;   // for /retry and /copy
+  theme: ThemeName;               // UI color theme
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `You are Nyx, an AI coding assistant built into LocalCode — a terminal tool made by TheAlxLabs.
@@ -270,6 +294,15 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     usage: '/steps 40',
     category: 'session',
   },
+  {
+    name: 'theme',
+    trigger: '/theme',
+    icon: '◑',
+    description: 'Switch color theme',
+    detail: 'List available themes or switch to one: dark, nord, monokai, light.',
+    usage: '/theme  |  /theme nord  |  /theme monokai',
+    category: 'session',
+  },
   // ── System & Personas ─────────────────────────────────────────────────────
   {
     name: 'sys',
@@ -334,6 +367,24 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     category: 'context',
   },
   {
+    name: 'template',
+    trigger: '/template',
+    icon: '⊞',
+    description: 'Manage prompt templates',
+    detail: 'List, add, use, or delete prompt templates. Usage: /template list | /template add <name> <prompt> | /template use <name> | /template delete <name>',
+    usage: '/template  |  /template add mytemplate Fix all TypeScript errors  |  /template use mytemplate',
+    category: 'context',
+  },
+  {
+    name: 'alias',
+    trigger: '/alias',
+    icon: '⇒',
+    description: 'Manage command aliases',
+    detail: 'Create shortcuts for commands. Usage: /alias | /alias <name> <command> | /alias delete <name>',
+    usage: '/alias  |  /alias review /review  |  /alias delete review',
+    category: 'session',
+  },
+  {
     name: 'models',
     trigger: '/models',
     icon: '⊞',
@@ -387,6 +438,33 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     usage: '/commit',
     category: 'git',
   },
+  {
+    name: 'git',
+    trigger: '/git',
+    icon: '⎇',
+    description: 'Run git commands and show results',
+    detail: 'Quick git panel: status, log, stash, branch, or any git command. Usage: /git | /git log | /git stash | /git branch',
+    usage: '/git  |  /git log  |  /git stash  |  /git branch  |  /git diff HEAD',
+    category: 'git',
+  },
+  {
+    name: 'history',
+    trigger: '/history',
+    icon: '◷',
+    description: 'Browse and restore session history',
+    detail: 'List recent sessions or restore one by index.',
+    usage: '/history  |  /history 3',
+    category: 'session',
+  },
+  {
+    name: 'share',
+    trigger: '/share',
+    icon: '↗',
+    description: 'Export conversation as self-contained HTML',
+    detail: 'Generates a beautiful HTML file of the conversation with syntax highlighting.',
+    usage: '/share',
+    category: 'session',
+  },
   // ── Tools ─────────────────────────────────────────────────────────────────
   {
     name: 'init',
@@ -430,6 +508,60 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: 'Manage MCP servers',
     detail: 'List, add, or remove MCP servers. Tools from connected servers are available to the agent automatically.',
     usage: '/mcp list  |  /mcp add <n> stdio <cmd>  |  /mcp tools',
+    category: 'tools',
+  },
+  {
+    name: 'watch',
+    trigger: '/watch',
+    icon: '◉',
+    description: 'Watch a file for changes and re-run last message',
+    detail: 'Automatically re-sends your last message when a file changes. Usage: /watch <file> | /watch stop',
+    usage: '/watch src/app.ts  |  /watch stop  |  /watch',
+    category: 'tools',
+  },
+  {
+    name: 'explain',
+    trigger: '/explain',
+    icon: '◈',
+    description: 'Explain code — a file or the last snippet',
+    detail: 'Pass a file path to explain that file, or use with no args to explain the last code snippet.',
+    usage: '/explain  |  /explain src/app.ts',
+    category: 'tools',
+  },
+  {
+    name: 'test',
+    trigger: '/test',
+    icon: '✚',
+    description: 'Run tests using the detected test runner',
+    detail: 'Detects jest/vitest/pytest/cargo/go and runs tests. Offers to fix failures.',
+    usage: '/test',
+    category: 'tools',
+  },
+  {
+    name: 'image',
+    trigger: '/image',
+    icon: '⊞',
+    description: 'Load an image file for vision analysis',
+    detail: 'Read an image file and add it to the conversation for vision-capable models.',
+    usage: '/image screenshot.png',
+    category: 'context',
+  },
+  {
+    name: 'index',
+    trigger: '/index',
+    icon: '⌖',
+    description: 'Build TF-IDF search index for working directory',
+    detail: 'Indexes all text files for semantic search. Use /search after indexing for better results.',
+    usage: '/index',
+    category: 'tools',
+  },
+  {
+    name: 'plugins',
+    trigger: '/plugins',
+    icon: '⬡',
+    description: 'List loaded plugins',
+    detail: 'Shows all plugins loaded from ~/.localcode/plugins/',
+    usage: '/plugins',
     category: 'tools',
   },
   // ── Providers ─────────────────────────────────────────────────────────────
@@ -483,8 +615,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: 'search',
     trigger: '/search',
     icon: '⌖',
-    description: 'Search file contents (grep)',
-    detail: 'Directly search for a pattern across all files in the working directory.',
+    description: 'Search file contents (grep or TF-IDF if indexed)',
+    detail: 'Search for a pattern. If /index has been run, uses TF-IDF scoring for semantic results.',
     usage: '/search TODO  |  /search "function render"',
     category: 'tools',
   },

@@ -75,6 +75,7 @@ export function Setup({ onComplete }: SetupProps): React.ReactElement {
       maxSteps: 20,
       sessionCost: 0,
       lastAssistantMessage: '',
+      theme: 'dark',
     };
     if (process.env.ANTHROPIC_API_KEY) session.apiKeys.claude = process.env.ANTHROPIC_API_KEY;
     if (process.env.OPENAI_API_KEY)    session.apiKeys.openai = process.env.OPENAI_API_KEY;

@@ -19,12 +19,13 @@ import {
   Provider,
   PROVIDERS,
   SLASH_COMMANDS,
-  SlashCommand,
   Message,
   ToolCall,
   DEFAULT_PERSONAS,
   DEFAULT_SYSTEM_PROMPT,
   ApprovalMode,
+  THEMES,
+  ThemeName,
 } from '../core/types.js';
 import { NyxHeader } from './NyxHeader.js';
 import { CommandPicker } from './CommandPicker.js';
@@ -41,7 +42,18 @@ import {
   loadNyxMemories,
   loadHooks,
   HooksConfig,
+  saveHistory,
+  loadHistory,
+  loadTemplates,
+  saveTemplates,
+  PromptTemplate,
+  loadAliases,
+  saveAliases,
+  listSessions,
+  loadSessionById,
 } from '../sessions/manager.js';
+import { loadPlugins, LocalCodePlugin } from '../plugins/loader.js';
+import { buildIndex, search as tfidfSearch, SearchIndex } from '../search/tfidf.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,12 +65,17 @@ interface DisplayMessage {
   isError?: boolean;
   toolName?: string;
   timestamp?: number;
+  expanded?: boolean;
 }
 
 interface PendingPermission {
   toolCall: ToolCall;
   resolve: (allowed: boolean, allowAll?: boolean) => void;
 }
+
+// ─── Spinner ──────────────────────────────────────────────────────────────────
+
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
@@ -84,14 +101,62 @@ export function App({ initialState }: AppProps): React.ReactElement {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [isMultiline, setIsMultiline] = useState(false);
   const [multilineBuffer, setMultilineBuffer] = useState<string[]>([]);
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
+  const [streamingTokens, setStreamingTokens] = useState(0);
+  // Pending test output for "fix?" prompt
+  const [pendingTestFix, setPendingTestFix] = useState<string | null>(null);
 
   const executorRef    = useRef<ToolExecutor>(new ToolExecutor(initialState.workingDir));
   const mcpRef         = useRef<McpManager>(new McpManager());
   const streamingIdRef = useRef<string | null>(null);
   const abortRef       = useRef<AbortController | null>(null);
   const hooksRef       = useRef<HooksConfig>(loadHooks());
+  const aliasesRef     = useRef<Record<string, string>>({});
+  const pluginsRef     = useRef<LocalCodePlugin[]>([]);
+  const watcherRef     = useRef<fs.FSWatcher | null>(null);
+  const watchFileRef   = useRef<string | null>(null);
+  const lastUserMsgRef = useRef<string>('');
+  const searchIndexRef = useRef<SearchIndex | null>(null);
 
-  // Load .nyx.md memory hierarchy on mount (global + project)
+  // Derive current theme
+  const theme = THEMES[session.theme ?? 'dark'];
+
+  // ── Mount effects ─────────────────────────────────────────────────────────────
+
+  // Load input history on mount
+  useEffect(() => {
+    const saved = loadHistory();
+    if (saved.length > 0) {
+      setHistory(saved);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load aliases on mount
+  useEffect(() => {
+    aliasesRef.current = loadAliases();
+  }, []);
+
+  // Load plugins on mount
+  useEffect(() => {
+    loadPlugins().then((plugins) => {
+      pluginsRef.current = plugins;
+      if (plugins.length > 0) {
+        // Silently loaded — available via /plugins
+      }
+    }).catch(() => { /* ok */ });
+  }, []);
+
+  // Spinner animation while streaming
+  useEffect(() => {
+    if (!isStreaming) return;
+    const id = setInterval(() => {
+      setSpinnerFrame((f) => (f + 1) % SPINNER_FRAMES.length);
+    }, 80);
+    return () => clearInterval(id);
+  }, [isStreaming]);
+
+  // Load .nyx.md memory hierarchy on mount (global + project) + auto-context
   useEffect(() => {
     const memories = loadNyxMemories(initialState.workingDir);
     if (memories.length > 0) {
@@ -101,6 +166,27 @@ export function App({ initialState }: AppProps): React.ReactElement {
         pinnedContext: [combined, ...s.pinnedContext],
       }));
       sysMsg(`Loaded ${memories.length} memory file${memories.length > 1 ? 's' : ''}: ${memories.map((m) => path.basename(m.source)).join(', ')}`);
+    } else {
+      // No .nyx.md found — try to inject git auto-context
+      const tryGitContext = async (): Promise<void> => {
+        try {
+          const gitLog = await new Promise<string>((res) => {
+            execFile('git', ['log', '--oneline', '-5'], { cwd: initialState.workingDir }, (err, out) => res(err ? '' : out));
+          });
+          const gitStatus = await new Promise<string>((res) => {
+            execFile('git', ['status', '--short'], { cwd: initialState.workingDir }, (err, out) => res(err ? '' : out));
+          });
+          if (gitLog.trim() || gitStatus.trim()) {
+            const autoCtx = `[Auto-context]\ngit log:\n${gitLog.trim()}\n\ngit status:\n${gitStatus.trim()}`;
+            setSession((s) => ({
+              ...s,
+              pinnedContext: [autoCtx, ...s.pinnedContext],
+            }));
+            sysMsg('Auto-context: injected git state (no .nyx.md found — run /init to create one)');
+          }
+        } catch { /* not a git repo — that's fine */ }
+      };
+      tryGitContext();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -159,7 +245,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
         LC_TOOL_NAME: toolCall?.name ?? '',
         LC_TOOL_ARGS: toolCall ? JSON.stringify(toolCall.args) : '',
         LC_TOOL_OUTPUT: output ?? '',
-        LC_TOOL_PATH: (toolCall?.args as any)?.path ?? (toolCall?.args as any)?.source ?? '',
+        LC_TOOL_PATH: (toolCall?.args as Record<string, string>)?.path ?? (toolCall?.args as Record<string, string>)?.source ?? '',
       };
       try {
         await new Promise<void>((resolve) => {
@@ -171,10 +257,241 @@ export function App({ initialState }: AppProps): React.ReactElement {
 
   // ── Slash command handler ─────────────────────────────────────────────────────
 
+  const sendMessage = useCallback(async (text: string): Promise<void> => {
+    if (!text.trim() || isStreaming) return;
+
+    // Add to history
+    const newHistory = [text, ...history.slice(0, 199)];
+    setHistory(newHistory);
+    saveHistory(newHistory);
+    setHistoryIndex(-1);
+    setInput('');
+    lastUserMsgRef.current = text;
+
+    // Handle @context syntax inline
+    let processedText = text;
+    const atMatches = text.match(/@[\w./\\-]+/g) ?? [];
+    for (const match of atMatches) {
+      const p = match.slice(1);
+      const result = await executorRef.current.execute({ name: 'read_file', args: { path: p } });
+      if (result.success) {
+        processedText = processedText.replace(match, `\n\`\`\`${p}\n${result.output}\n\`\`\``);
+      } else {
+        sysMsg(`@context warning: could not read "${p}" — ${result.output}`, true);
+        processedText = processedText.replace(match, `[file not found: ${p}]`);
+      }
+    }
+
+    const userMsg: Message = { role: 'user', content: processedText };
+    addDisplay({ role: 'user', content: text });
+
+    setSession((s) => {
+      const updated = { ...s, messages: [...s.messages, userMsg] };
+      return updated;
+    });
+
+    setIsStreaming(true);
+    setMood('thinking');
+    setStreamingTokens(0);
+
+    // Create streaming display message
+    const streamId = addDisplay({ role: 'assistant', content: '', streaming: true });
+    streamingIdRef.current = streamId;
+    let accumulated = '';
+
+    // Abort controller — cancelled by Escape key
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    // Snapshot session for this run
+    const currentSession = session;
+
+    const run = async (): Promise<void> => {
+      const pinnedMsg: Message[] = currentSession.pinnedContext.length
+        ? [{ role: 'user', content: `[Pinned context — always relevant]\n${currentSession.pinnedContext.join('\n')}` }]
+        : [];
+
+      const msgs: Message[] = [...pinnedMsg, ...currentSession.messages, userMsg];
+
+      // Merge built-in tools with MCP tools
+      const mcpToolDefs = mcpRef.current.getToolDefinitions();
+      const allTools = [...BUILTIN_TOOLS, ...mcpToolDefs];
+
+      await runAgent(
+        currentSession.provider,
+        currentSession.apiKeys,
+        currentSession.model,
+        msgs,
+        async (chunk: StreamChunk) => {
+          if (controller.signal.aborted) return;
+          switch (chunk.type) {
+            case 'agent_step':
+              if ((chunk.step ?? 0) > 0) {
+                // Show step indicator after first iteration
+                addDisplay({
+                  role: 'system',
+                  content: `${SPINNER_FRAMES[spinnerFrame]}  Step ${(chunk.step ?? 0) + 1}/${chunk.maxSteps}`,
+                });
+              }
+              break;
+
+            case 'text':
+              accumulated += chunk.text ?? '';
+              updateDisplay(streamId, { content: accumulated, streaming: true });
+              setStreamingTokens((prev) => prev + Math.ceil((chunk.text ?? '').length / 4));
+              break;
+
+            case 'done':
+              updateDisplay(streamId, { streaming: false });
+              setStreamingTokens(0);
+              if (accumulated.trim()) {
+                const inputTokens = Math.ceil(msgs.reduce((a, m) => a + m.content.length, 0) / 4);
+                const outputTokens = Math.ceil(accumulated.length / 4);
+                const cost = estimateCost(currentSession.model, inputTokens, outputTokens);
+                setSession((s) => {
+                  const newMessages = [
+                    ...s.messages,
+                    { role: 'assistant' as const, content: accumulated },
+                  ];
+                  const shouldCheckpoint = s.autoCheckpoint && newMessages.length % 20 === 0;
+                  const checkpoints = shouldCheckpoint
+                    ? [...s.checkpoints, {
+                        id: `cp_auto_${Date.now()}`,
+                        label: `auto-${newMessages.length}msgs`,
+                        timestamp: Date.now(),
+                        messages: newMessages,
+                        files: {},
+                      }]
+                    : s.checkpoints;
+                  if (shouldCheckpoint) setTimeout(() => sysMsg(`Auto-checkpoint saved.`), 100);
+
+                  // Multi-file diff summary
+                  const sessionFiles = executorRef.current.getSessionFiles();
+                  const modifiedPaths = Object.keys(sessionFiles);
+                  if (modifiedPaths.length > 0) {
+                    const summaryParts = modifiedPaths.slice(0, 5).map((fp) => {
+                      const diff = executorRef.current.unifiedDiff(fp);
+                      if (!diff) return `  ${path.basename(fp)}`;
+                      const adds = (diff.match(/^\+[^+]/gm) ?? []).length;
+                      const dels = (diff.match(/^-[^-]/gm) ?? []).length;
+                      return `  ${path.basename(fp)} +${adds} -${dels}`;
+                    });
+                    if (summaryParts.length > 0) {
+                      setTimeout(() => sysMsg(`· Files changed: ${summaryParts.join('  |')}`), 50);
+                    }
+                  }
+
+                  const next = {
+                    ...s,
+                    messages: newMessages,
+                    lastAssistantMessage: accumulated,
+                    sessionCost: s.sessionCost + cost,
+                    checkpoints,
+                  };
+                  setTimeout(() => { try { saveSession(next); } catch { /* non-critical */ } }, 0);
+                  return next;
+                });
+              }
+              break;
+
+            case 'error':
+              updateDisplay(streamId, { content: chunk.error ?? 'Unknown error', streaming: false, isError: true });
+              setMood('error');
+              setStreamingTokens(0);
+              break;
+          }
+        },
+        {
+          maxSteps: currentSession.maxSteps,
+          tools: allTools,
+          onToolCall: async (toolCall: ToolCall) => {
+            if (needsApproval(toolCall, currentSession.approvalMode)) {
+              setMood('waiting');
+              const perm = await requestPermission(toolCall);
+              if (perm.allowAll) setSession((s) => ({ ...s, approvalMode: 'full-auto' }));
+              setMood('thinking');
+              return perm;
+            }
+            return { allowed: true, allowAll: false };
+          },
+          onToolResult: (toolCall: ToolCall, output: string, diff?: unknown) => {
+            // Truncate tool output to 200 chars for display
+            const truncated = output.length > 200
+              ? output.slice(0, 200) + `  [truncated +${output.length - 200} chars]`
+              : output;
+            addDisplay({
+              role: 'tool',
+              content: `${toolCall.name} → ${truncated}`,
+              toolName: toolCall.name,
+              streaming: false,
+            });
+            if (diff && typeof diff === 'object' && 'additions' in (diff as object)) {
+              const d = diff as { path: string; additions: number; deletions: number };
+              addDisplay({ role: 'system', content: `  ${d.path}  +${d.additions} -${d.deletions}` });
+            }
+          },
+          executeTool: async (toolCall: ToolCall) => {
+            await runHooks('PreToolUse', toolCall);
+
+            let result: { success: boolean; output: string };
+            if (mcpRef.current.isMcpTool(toolCall.name)) {
+              const r = await mcpRef.current.callTool(toolCall.name, toolCall.args as Record<string, unknown>);
+              result = { success: r.success, output: r.output };
+            } else {
+              result = await executorRef.current.execute(toolCall);
+            }
+
+            await runHooks('PostToolUse', toolCall, result.output);
+            return result;
+          },
+        },
+        currentSession.systemPrompt,
+        controller.signal,
+      );
+    };
+
+    try {
+      await run();
+    } catch (err) {
+      updateDisplay(streamId, {
+        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        streaming: false,
+        isError: true,
+      });
+      setMood('error');
+    } finally {
+      setIsStreaming(false);
+      setMood((m) => (m === 'thinking' || m === 'waiting' ? 'idle' : m));
+      runHooks('Notification');
+    }
+  }, [isStreaming, session, history, addDisplay, updateDisplay, requestPermission, runHooks, spinnerFrame, sysMsg]);
+
   const handleSlashCommand = useCallback(async (raw: string): Promise<void> => {
     const parts = raw.trim().split(/\s+/);
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1).join(' ');
+
+    // Check aliases first
+    const aliasedCmd = aliasesRef.current[cmd];
+    if (aliasedCmd) {
+      await handleSlashCommand(args ? `${aliasedCmd} ${args}` : aliasedCmd);
+      return;
+    }
+
+    // Check plugins
+    const plugin = pluginsRef.current.find((p) => p.trigger === cmd);
+    if (plugin) {
+      try {
+        await plugin.execute(args, {
+          workingDir: session.workingDir,
+          sysMsg,
+          addDisplay: (msg) => addDisplay(msg as Omit<DisplayMessage, 'id' | 'timestamp'>),
+        });
+      } catch (err) {
+        sysMsg(`Plugin ${plugin.name} error: ${err instanceof Error ? err.message : String(err)}`, true);
+      }
+      return;
+    }
 
     switch (cmd) {
       case '/help': {
@@ -190,6 +507,138 @@ export function App({ initialState }: AppProps): React.ReactElement {
         setSession((s) => ({ ...s, messages: [] }));
         setMood('idle');
         sysMsg('Conversation cleared.');
+        return;
+      }
+
+      case '/theme': {
+        const validThemes: ThemeName[] = ['dark', 'nord', 'monokai', 'light'];
+        if (!args) {
+          const list = validThemes.map((t) => `  ${session.theme === t ? '▶ ' : '  '}${t}`).join('\n');
+          sysMsg(`Themes:\n${list}\n\nUsage: /theme <name>`);
+          return;
+        }
+        if (!validThemes.includes(args as ThemeName)) {
+          sysMsg(`Unknown theme: ${args}. Options: dark, nord, monokai, light`, true);
+          return;
+        }
+        setSession((s) => ({ ...s, theme: args as ThemeName }));
+        sysMsg(`Theme set to: ${args}`);
+        return;
+      }
+
+      case '/template': {
+        const tParts = args.split(/\s+/);
+        const tSub = tParts[0]?.toLowerCase() ?? '';
+        const tRest = tParts.slice(1).join(' ');
+
+        if (!tSub || tSub === 'list') {
+          const templates = loadTemplates();
+          if (!templates.length) {
+            sysMsg('No templates saved. Usage: /template add <name> <prompt>');
+            return;
+          }
+          const list = templates.map((t, i) => `  ${i + 1}. ${t.name}  —  ${t.description || t.prompt.slice(0, 60)}`).join('\n');
+          sysMsg(`Templates (${templates.length}):\n${list}\n\nUsage: /template use <name>`);
+          return;
+        }
+
+        if (tSub === 'add') {
+          const nameParts = tRest.split(/\s+/);
+          const tName = nameParts[0];
+          const tPrompt = nameParts.slice(1).join(' ');
+          if (!tName || !tPrompt) {
+            sysMsg('Usage: /template add <name> <prompt text>', true);
+            return;
+          }
+          const templates = loadTemplates();
+          const existing = templates.findIndex((t) => t.name === tName);
+          const newTemplate: PromptTemplate = { name: tName, prompt: tPrompt, description: tPrompt.slice(0, 60) };
+          if (existing >= 0) {
+            templates[existing] = newTemplate;
+          } else {
+            templates.push(newTemplate);
+          }
+          saveTemplates(templates);
+          sysMsg(`Template saved: "${tName}"`);
+          return;
+        }
+
+        if (tSub === 'use') {
+          const tName = tRest.trim();
+          if (!tName) { sysMsg('Usage: /template use <name>', true); return; }
+          const templates = loadTemplates();
+          const found = templates.find((t) => t.name === tName);
+          if (!found) { sysMsg(`Template not found: ${tName}`, true); return; }
+          setInput(found.prompt);
+          sysMsg(`Template loaded into input: "${tName}"`);
+          return;
+        }
+
+        if (tSub === 'delete') {
+          const tName = tRest.trim();
+          if (!tName) { sysMsg('Usage: /template delete <name>', true); return; }
+          const templates = loadTemplates();
+          const filtered = templates.filter((t) => t.name !== tName);
+          if (filtered.length === templates.length) {
+            sysMsg(`Template not found: ${tName}`, true);
+            return;
+          }
+          saveTemplates(filtered);
+          sysMsg(`Template deleted: "${tName}"`);
+          return;
+        }
+
+        sysMsg('Usage: /template [list|add|use|delete] ...');
+        return;
+      }
+
+      case '/alias': {
+        const aParts = args.split(/\s+/);
+        const aSub = aParts[0] ?? '';
+
+        if (!aSub) {
+          const aliases = aliasesRef.current;
+          const keys = Object.keys(aliases);
+          if (!keys.length) {
+            sysMsg('No aliases. Usage: /alias <name> <command>');
+            return;
+          }
+          const list = keys.map((k) => `  ${k}  →  ${aliases[k]}`).join('\n');
+          sysMsg(`Aliases (${keys.length}):\n${list}`);
+          return;
+        }
+
+        if (aSub === 'delete') {
+          const aName = aParts[1];
+          if (!aName) { sysMsg('Usage: /alias delete <name>', true); return; }
+          const aliases = { ...aliasesRef.current };
+          if (!(aName in aliases)) { sysMsg(`Alias not found: ${aName}`, true); return; }
+          delete aliases[aName];
+          aliasesRef.current = aliases;
+          saveAliases(aliases);
+          sysMsg(`Alias deleted: ${aName}`);
+          return;
+        }
+
+        // /alias <name> <command>
+        const aName = aSub;
+        const aCmd = aParts.slice(1).join(' ');
+        if (!aCmd) { sysMsg('Usage: /alias <name> <command>', true); return; }
+        const aliases = { ...aliasesRef.current, [aName]: aCmd };
+        aliasesRef.current = aliases;
+        saveAliases(aliases);
+        sysMsg(`Alias set: ${aName}  →  ${aCmd}`);
+        return;
+      }
+
+      case '/plugins': {
+        const plugins = pluginsRef.current;
+        if (!plugins.length) {
+          sysMsg(`No plugins loaded.\n\nPlace .js plugin files in ~/.localcode/plugins/\nEach file should export default: { name, trigger, description, execute }`);
+          return;
+        }
+        const list = plugins.map((p) => `  ${p.trigger.padEnd(16)} ${p.description}`).join('\n');
+        sysMsg(`Loaded plugins (${plugins.length}):\n${list}`);
         return;
       }
 
@@ -276,6 +725,38 @@ export function App({ initialState }: AppProps): React.ReactElement {
         return;
       }
 
+      case '/history': {
+        const sessions = listSessions();
+        if (!sessions.length) {
+          sysMsg('No session history found.');
+          return;
+        }
+        if (!args) {
+          const list = sessions.slice(0, 20).map((s, i) => {
+            const date = new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            const shortCwd = s.cwd.replace(os.homedir(), '~').slice(-40);
+            return `  ${String(i + 1).padStart(2)}. ${date}  ${shortCwd}  (${s.messageCount} msgs)  ${s.provider}/${s.model}`;
+          }).join('\n');
+          sysMsg(`Session history (${Math.min(20, sessions.length)}):\n${list}\n\nUsage: /history <n> to restore`);
+          return;
+        }
+        const n = parseInt(args, 10);
+        if (isNaN(n) || n < 1 || n > sessions.length) {
+          sysMsg(`Invalid session number: ${args}`, true);
+          return;
+        }
+        const target = sessions[n - 1];
+        const loaded = loadSessionById(target.id);
+        if (!loaded) {
+          sysMsg(`Could not load session: ${target.id}`, true);
+          return;
+        }
+        setSession(loaded);
+        setDisplayMessages([]);
+        sysMsg(`Loaded session from ${new Date(target.timestamp).toLocaleString()} — ${loaded.messages.length} messages`);
+        return;
+      }
+
       case '/review': {
         setMood('thinking');
         sysMsg('Running code review…');
@@ -349,6 +830,49 @@ export function App({ initialState }: AppProps): React.ReactElement {
           sysMsg(`Commit error: ${err}`, true);
           setMood('error');
         }
+        return;
+      }
+
+      case '/git': {
+        const gParts = args.split(/\s+/);
+        const gSub = gParts[0]?.toLowerCase() ?? '';
+
+        const runGit = async (gitArgs: string[]): Promise<string> => {
+          return new Promise((res) => {
+            execFile('git', gitArgs, { cwd: session.workingDir }, (err, out, errOut) => {
+              res(err ? (errOut || err.message) : out);
+            });
+          });
+        };
+
+        if (!gSub || gSub === 'status') {
+          const status = await runGit(['status', '--short']);
+          const log = await runGit(['log', '--oneline', '-5']);
+          sysMsg(`git status:\n${status.trim() || '(clean)'}\n\ngit log (last 5):\n${log.trim()}`);
+          return;
+        }
+
+        if (gSub === 'log') {
+          const log = await runGit(['log', '--oneline', '-20']);
+          sysMsg(`git log:\n${log.trim()}`);
+          return;
+        }
+
+        if (gSub === 'stash') {
+          const out = await runGit(['stash']);
+          sysMsg(`git stash:\n${out.trim()}`);
+          return;
+        }
+
+        if (gSub === 'branch') {
+          const branches = await runGit(['branch', '-a']);
+          sysMsg(`git branch:\n${branches.trim()}`);
+          return;
+        }
+
+        // Pass-through any git command
+        const out = await runGit(args.split(/\s+/).filter(Boolean));
+        sysMsg(`git ${args}:\n${out.trim()}`);
         return;
       }
 
@@ -489,7 +1013,8 @@ export function App({ initialState }: AppProps): React.ReactElement {
           `~Tokens   ${tokens.toLocaleString()}\n` +
           `Checkpts  ${cps}\n` +
           `CWD       ${session.workingDir}\n` +
-          `Mode      ${session.approvalMode}`,
+          `Mode      ${session.approvalMode}\n` +
+          `Theme     ${session.theme ?? 'dark'}`,
         );
         return;
       }
@@ -636,6 +1161,74 @@ export function App({ initialState }: AppProps): React.ReactElement {
         return;
       }
 
+      case '/share': {
+        const timestamp = Date.now();
+        const outPath = path.join(session.workingDir, `localcode-share-${timestamp}.html`);
+
+        const escapeHtml = (s: string): string =>
+          s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+        const msgHtml = session.messages.map((m) => {
+          const roleLabel = m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Nyx' : 'System';
+          const roleClass = m.role;
+          const content = escapeHtml(m.content)
+            .replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) =>
+              `<pre><code class="lang-${lang}">${code}</code></pre>`
+            )
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/\n/g, '<br>');
+          return `<div class="message ${roleClass}"><span class="role">${roleLabel}</span><div class="content">${content}</div></div>`;
+        }).join('\n');
+
+        const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalCode Session — ${new Date(timestamp).toLocaleString()}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 14px; line-height: 1.6; padding: 24px; }
+  h1 { color: #f5c518; margin-bottom: 8px; font-size: 20px; }
+  .meta { color: #888; font-size: 12px; margin-bottom: 24px; }
+  .message { margin-bottom: 20px; padding: 12px 16px; border-radius: 8px; max-width: 900px; }
+  .message.user { background: #16213e; border-left: 3px solid #f5c518; }
+  .message.assistant { background: #0f3460; border-left: 3px solid #e94560; }
+  .message.system { background: #0a0a1a; border-left: 3px solid #444; color: #888; }
+  .role { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888; display: block; margin-bottom: 6px; }
+  .message.user .role { color: #f5c518; }
+  .message.assistant .role { color: #e94560; }
+  .content { white-space: pre-wrap; word-break: break-word; }
+  pre { background: #0d1117; border: 1px solid #333; border-radius: 6px; padding: 12px; margin: 8px 0; overflow-x: auto; }
+  code { background: #1e1e2e; padding: 2px 6px; border-radius: 3px; color: #a6da95; font-size: 13px; }
+  pre code { background: none; padding: 0; color: #cdd6f4; }
+  strong { color: #f5c518; }
+  footer { margin-top: 32px; color: #444; font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>LocalCode Session Export</h1>
+<div class="meta">
+  Date: ${new Date(timestamp).toLocaleString()} &nbsp;·&nbsp;
+  Provider: ${PROVIDERS[session.provider].displayName} &nbsp;·&nbsp;
+  Model: ${escapeHtml(session.model)} &nbsp;·&nbsp;
+  Messages: ${session.messages.length}
+</div>
+${msgHtml}
+<footer>Generated by LocalCode &nbsp;·&nbsp; github.com/thealxlabs/localcode</footer>
+</body>
+</html>`;
+
+        try {
+          fs.writeFileSync(outPath, html, 'utf8');
+          sysMsg(`HTML export saved to:\n  ${outPath}`);
+        } catch (err) {
+          sysMsg(`Export failed: ${err instanceof Error ? err.message : String(err)}`, true);
+        }
+        return;
+      }
+
       case '/undo': {
         const files = executorRef.current.getSessionFiles();
         const paths = Object.keys(files);
@@ -742,23 +1335,264 @@ export function App({ initialState }: AppProps): React.ReactElement {
         return;
       }
 
+      case '/explain': {
+        setMood('thinking');
+        let prompt: string;
+        if (args) {
+          // Load file at path
+          const filePath = path.isAbsolute(args) ? args : path.join(session.workingDir, args);
+          try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            prompt = `Explain this code clearly: what it does, how it works, key patterns and design decisions.\n\nFile: ${args}\n\`\`\`\n${content.slice(0, 8000)}\n\`\`\``;
+          } catch {
+            sysMsg(`Could not read file: ${args}`, true);
+            setMood('idle');
+            return;
+          }
+        } else {
+          prompt = 'Explain the last code snippet in this conversation: what it does, how it works, and any key patterns or design decisions.';
+        }
+        const explainId = addDisplay({ role: 'assistant', content: '', streaming: true });
+        let explanation = '';
+        await streamProvider(
+          session.provider, session.apiKeys, session.model,
+          [...session.messages, { role: 'user', content: prompt }],
+          (chunk) => { if (chunk.text) { explanation += chunk.text; updateDisplay(explainId, { content: explanation, streaming: true }); } },
+          session.systemPrompt,
+        );
+        updateDisplay(explainId, { content: explanation, streaming: false });
+        setSession((s) => ({ ...s, lastAssistantMessage: explanation }));
+        setMood('idle');
+        return;
+      }
+
+      case '/test': {
+        setMood('thinking');
+        sysMsg('Detecting test runner…');
+
+        const cwd = session.workingDir;
+        let testCmd: string | null = null;
+
+        // Detect test runner
+        try {
+          const pkgPath = path.join(cwd, 'package.json');
+          if (fs.existsSync(pkgPath)) {
+            const pkgContent = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as Record<string, unknown>;
+            const deps = { ...((pkgContent.dependencies ?? {}) as Record<string, string>), ...((pkgContent.devDependencies ?? {}) as Record<string, string>) };
+            if (deps['vitest']) {
+              testCmd = 'npx vitest run';
+            } else if (deps['jest'] || (pkgContent.scripts as Record<string, string> | undefined)?.test?.includes('jest')) {
+              testCmd = 'npm test';
+            }
+          }
+        } catch { /* ok */ }
+
+        if (!testCmd && fs.existsSync(path.join(cwd, 'Cargo.toml'))) {
+          testCmd = 'cargo test';
+        }
+
+        if (!testCmd && fs.existsSync(path.join(cwd, 'go.mod'))) {
+          testCmd = 'go test ./...';
+        }
+
+        if (!testCmd) {
+          const pyFiles = ['pytest.ini', 'pyproject.toml', 'setup.cfg'];
+          for (const f of pyFiles) {
+            const fp = path.join(cwd, f);
+            if (fs.existsSync(fp)) {
+              const content = fs.readFileSync(fp, 'utf8');
+              if (f === 'pyproject.toml' ? content.includes('[tool.pytest') : true) {
+                testCmd = 'pytest';
+                break;
+              }
+            }
+          }
+        }
+
+        if (!testCmd) {
+          sysMsg('Could not detect a test runner. Expected: package.json (jest/vitest), pytest.ini, Cargo.toml, or go.mod', true);
+          setMood('idle');
+          return;
+        }
+
+        sysMsg(`Running: ${testCmd}`);
+
+        const testOutputId = addDisplay({ role: 'system', content: `$ ${testCmd}\n`, streaming: true });
+        let testOutput = `$ ${testCmd}\n`;
+        let exitCode = 0;
+
+        await new Promise<void>((resolve) => {
+          const child = execFile('sh', ['-c', testCmd as string], { cwd, env: process.env as Record<string, string> }, (err, out, errOut) => {
+            if (err) exitCode = (err as NodeJS.ErrnoException & { code?: number }).code ?? 1;
+            testOutput += out + errOut;
+            resolve();
+          });
+          if (child.stdout) {
+            child.stdout.on('data', (data: string) => {
+              testOutput += data;
+              updateDisplay(testOutputId, { content: testOutput, streaming: true });
+            });
+          }
+          if (child.stderr) {
+            child.stderr.on('data', (data: string) => {
+              testOutput += data;
+              updateDisplay(testOutputId, { content: testOutput, streaming: true });
+            });
+          }
+        });
+
+        updateDisplay(testOutputId, { content: testOutput, streaming: false });
+
+        if (exitCode !== 0) {
+          sysMsg(`Tests failed (exit code ${exitCode}). Ask Nyx to fix? [y/N]`);
+          setPendingTestFix(testOutput);
+        } else {
+          sysMsg('All tests passed!');
+          setMood('happy');
+        }
+        setMood(exitCode !== 0 ? 'error' : 'idle');
+        return;
+      }
+
+      case '/watch': {
+        const wSub = args.trim();
+
+        if (!wSub) {
+          if (watchFileRef.current) {
+            sysMsg(`Watching: ${watchFileRef.current}\n\nUse /watch stop to stop.`);
+          } else {
+            sysMsg('No file being watched. Usage: /watch <file>');
+          }
+          return;
+        }
+
+        if (wSub === 'stop') {
+          if (watcherRef.current) {
+            watcherRef.current.close();
+            watcherRef.current = null;
+            const prev = watchFileRef.current;
+            watchFileRef.current = null;
+            sysMsg(`Stopped watching: ${prev}`);
+          } else {
+            sysMsg('No active watcher.');
+          }
+          return;
+        }
+
+        // Start watching
+        const watchPath = path.isAbsolute(wSub) ? wSub : path.join(session.workingDir, wSub);
+        if (!fs.existsSync(watchPath)) {
+          sysMsg(`File not found: ${watchPath}`, true);
+          return;
+        }
+
+        // Stop previous watcher
+        if (watcherRef.current) {
+          watcherRef.current.close();
+          watcherRef.current = null;
+        }
+
+        watchFileRef.current = watchPath;
+        sysMsg(`Watching ${watchPath}…`);
+
+        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+        watcherRef.current = fs.watch(watchPath, () => {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            const lastMsg = lastUserMsgRef.current;
+            if (lastMsg && !isStreaming) {
+              sysMsg(`File changed: ${path.basename(watchPath)} — re-running last message…`);
+              sendMessage(lastMsg);
+            }
+          }, 500);
+        });
+        return;
+      }
+
+      case '/image': {
+        if (!args) { sysMsg('Usage: /image <file-path>'); return; }
+        const imgPath = path.isAbsolute(args) ? args : path.join(session.workingDir, args);
+        if (!fs.existsSync(imgPath)) {
+          sysMsg(`File not found: ${imgPath}`, true);
+          return;
+        }
+        try {
+          const imgBuf = fs.readFileSync(imgPath);
+          const base64 = imgBuf.toString('base64');
+          const ext = path.extname(imgPath).toLowerCase().slice(1);
+          const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+          const mimeType = mimeMap[ext] ?? 'image/png';
+          const sizeKb = Math.round(imgBuf.length / 1024);
+
+          const imgMsg: Message = {
+            role: 'user',
+            content: `[Image: ${path.basename(imgPath)}]`,
+            images: [{ base64, mimeType }],
+          };
+          setSession((s) => ({ ...s, messages: [...s.messages, imgMsg] }));
+          addDisplay({ role: 'user', content: `[Image: ${path.basename(imgPath)}]` });
+          sysMsg(`Image loaded: ${path.basename(imgPath)} (${sizeKb}kb). You can now ask about it.`);
+        } catch (err) {
+          sysMsg(`Could not read image: ${err instanceof Error ? err.message : String(err)}`, true);
+        }
+        return;
+      }
+
+      case '/index': {
+        sysMsg(`Building TF-IDF index for ${session.workingDir}…`);
+        setMood('thinking');
+        try {
+          const index = buildIndex(session.workingDir, 500);
+          searchIndexRef.current = index;
+          sysMsg(`Indexed ${index.files.length} files. Use /search <query> for semantic search.`);
+        } catch (err) {
+          sysMsg(`Indexing failed: ${err instanceof Error ? err.message : String(err)}`, true);
+        }
+        setMood('idle');
+        return;
+      }
+
+      case '/search': {
+        if (!args) { sysMsg('Usage: /search <pattern>  — search file contents in working dir'); return; }
+
+        // Use TF-IDF if indexed
+        if (searchIndexRef.current) {
+          sysMsg(`Searching (TF-IDF) for "${args}"…`);
+          const results = tfidfSearch(args, searchIndexRef.current, 10);
+          if (!results.length) {
+            sysMsg(`No results for: ${args}`);
+            return;
+          }
+          const list = results.map((r, i) =>
+            `  ${i + 1}. ${r.filePath.replace(session.workingDir + '/', '')}  (score: ${r.score.toFixed(3)})\n     ${r.snippet}`
+          ).join('\n');
+          sysMsg(`TF-IDF results for "${args}":\n${list}`);
+          return;
+        }
+
+        sysMsg(`Searching for "${args}"…`);
+        const result = await executorRef.current.execute({ name: 'search_files', args: { pattern: args, path: '.' } });
+        sysMsg(result.success && result.output.trim() ? result.output : `No matches found for: ${args}\n\nTip: run /index first for semantic search.`);
+        return;
+      }
+
       case '/init': {
         sysMsg('Analyzing project…');
         setMood('thinking');
         try {
           // Gather project signals
           const signals: string[] = [];
-          const tryRead = (f: string) => { try { return fs.readFileSync(path.join(session.workingDir, f), 'utf8').slice(0, 500); } catch { return null; } };
-          const pkg     = tryRead('package.json');
+          const tryRead = (f: string): string | null => { try { return fs.readFileSync(path.join(session.workingDir, f), 'utf8').slice(0, 500); } catch { return null; } };
+          const pkgFile = tryRead('package.json');
           const cargo   = tryRead('Cargo.toml');
           const pyproj  = tryRead('pyproject.toml');
           const gomod   = tryRead('go.mod');
           const readme  = tryRead('README.md') ?? tryRead('README');
-          if (pkg)    signals.push(`package.json:\n${pkg}`);
-          if (cargo)  signals.push(`Cargo.toml:\n${cargo}`);
-          if (pyproj) signals.push(`pyproject.toml:\n${pyproj}`);
-          if (gomod)  signals.push(`go.mod:\n${gomod}`);
-          if (readme) signals.push(`README:\n${readme}`);
+          if (pkgFile) signals.push(`package.json:\n${pkgFile}`);
+          if (cargo)   signals.push(`Cargo.toml:\n${cargo}`);
+          if (pyproj)  signals.push(`pyproject.toml:\n${pyproj}`);
+          if (gomod)   signals.push(`go.mod:\n${gomod}`);
+          if (readme)  signals.push(`README:\n${readme}`);
 
           const dirResult = await executorRef.current.execute({ name: 'list_dir', args: { path: '.', recursive: true } });
           signals.push(`Directory structure:\n${dirResult.output.slice(0, 1000)}`);
@@ -829,9 +1663,15 @@ export function App({ initialState }: AppProps): React.ReactElement {
         const hookTotal = [...(hooksRef.current.PreToolUse ?? []), ...(hooksRef.current.PostToolUse ?? []), ...(hooksRef.current.Notification ?? [])].length;
         checks.push({ label: 'Hooks', status: hookTotal ? `${hookTotal} configured` : 'none (optional)', ok: true });
 
+        // Plugins
+        checks.push({ label: 'Plugins', status: pluginsRef.current.length ? `${pluginsRef.current.length} loaded` : 'none', ok: true });
+
+        // Search index
+        checks.push({ label: 'Search index', status: searchIndexRef.current ? `${searchIndexRef.current.files.length} files` : 'not built (run /index)', ok: !!searchIndexRef.current });
+
         const W = 22;
         const out = checks.map((c) => `  ${c.ok ? '✓' : '✕'} ${c.label.padEnd(W)} ${c.status}`).join('\n');
-        sysMsg(`LocalCode Doctor\n\n${out}\n\nMode: ${session.approvalMode}  Steps: ${session.maxSteps}  Provider: ${PROVIDERS[session.provider].displayName}`);
+        sysMsg(`LocalCode Doctor\n\n${out}\n\nMode: ${session.approvalMode}  Steps: ${session.maxSteps}  Theme: ${session.theme ?? 'dark'}  Provider: ${PROVIDERS[session.provider].displayName}`);
         setMood('idle');
         return;
       }
@@ -1019,14 +1859,6 @@ export function App({ initialState }: AppProps): React.ReactElement {
         return;
       }
 
-      case '/search': {
-        if (!args) { sysMsg('Usage: /search <pattern>  — search file contents in working dir'); return; }
-        sysMsg(`Searching for "${args}"…`);
-        const result = await executorRef.current.execute({ name: 'search_files', args: { pattern: args, path: '.' } });
-        sysMsg(result.success && result.output.trim() ? result.output : `No matches found for: ${args}`);
-        return;
-      }
-
       case '/ls': {
         const target = args || '.';
         const result = await executorRef.current.execute({ name: 'list_dir', args: { path: target, recursive: false } });
@@ -1050,192 +1882,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
       default:
         sysMsg(`Unknown command: ${cmd}. Type / to see all commands.`, true);
     }
-  }, [session, sysMsg, addDisplay, exit]);
-
-  // ── Main send handler ─────────────────────────────────────────────────────────
-
-  const sendMessage = useCallback(async (text: string): Promise<void> => {
-    if (!text.trim() || isStreaming) return;
-
-    // Add to history
-    setHistory((h) => [text, ...h.slice(0, 99)]);
-    setHistoryIndex(-1);
-    setInput('');
-
-    // Handle @context syntax inline
-    let processedText = text;
-    const atMatches = text.match(/@[\w./\\-]+/g) ?? [];
-    for (const match of atMatches) {
-      const p = match.slice(1);
-      const result = await executorRef.current.execute({ name: 'read_file', args: { path: p } });
-      if (result.success) {
-        processedText = processedText.replace(match, `\n\`\`\`${p}\n${result.output}\n\`\`\``);
-      } else {
-        sysMsg(`@context warning: could not read "${p}" — ${result.output}`, true);
-        processedText = processedText.replace(match, `[file not found: ${p}]`);
-      }
-    }
-
-    const userMsg: Message = { role: 'user', content: processedText };
-    addDisplay({ role: 'user', content: text });
-
-    setSession((s) => {
-      const updated = { ...s, messages: [...s.messages, userMsg] };
-      return updated;
-    });
-
-    setIsStreaming(true);
-    setMood('thinking');
-
-    // Create streaming display message
-    const streamId = addDisplay({ role: 'assistant', content: '', streaming: true });
-    streamingIdRef.current = streamId;
-    let accumulated = '';
-
-    // Abort controller — cancelled by Escape key
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    // Snapshot session for this run
-    const currentSession = session;
-
-    const run = async (): Promise<void> => {
-      const pinnedMsg: Message[] = currentSession.pinnedContext.length
-        ? [{ role: 'user', content: `[Pinned context — always relevant]\n${currentSession.pinnedContext.join('\n')}` }]
-        : [];
-
-      const msgs: Message[] = [...pinnedMsg, ...currentSession.messages, userMsg];
-
-      // Merge built-in tools with MCP tools
-      const mcpToolDefs = mcpRef.current.getToolDefinitions();
-      const allTools = [...BUILTIN_TOOLS, ...mcpToolDefs];
-
-      await runAgent(
-        currentSession.provider,
-        currentSession.apiKeys,
-        currentSession.model,
-        msgs,
-        async (chunk: StreamChunk) => {
-          if (controller.signal.aborted) return;
-          switch (chunk.type) {
-            case 'agent_step':
-              if ((chunk.step ?? 0) > 0) {
-                // Show step indicator after first iteration
-                addDisplay({
-                  role: 'system',
-                  content: `⟳  Step ${(chunk.step ?? 0) + 1}/${chunk.maxSteps}`,
-                });
-              }
-              break;
-
-            case 'text':
-              accumulated += chunk.text ?? '';
-              updateDisplay(streamId, { content: accumulated, streaming: true });
-              break;
-
-            case 'done':
-              updateDisplay(streamId, { streaming: false });
-              if (accumulated.trim()) {
-                const inputTokens = Math.ceil(msgs.reduce((a, m) => a + m.content.length, 0) / 4);
-                const outputTokens = Math.ceil(accumulated.length / 4);
-                const cost = estimateCost(currentSession.model, inputTokens, outputTokens);
-                setSession((s) => {
-                  // s.messages already contains userMsg (added before run() was called)
-                  const newMessages = [
-                    ...s.messages,
-                    { role: 'assistant' as const, content: accumulated },
-                  ];
-                  const shouldCheckpoint = s.autoCheckpoint && newMessages.length % 20 === 0;
-                  const checkpoints = shouldCheckpoint
-                    ? [...s.checkpoints, {
-                        id: `cp_auto_${Date.now()}`,
-                        label: `auto-${newMessages.length}msgs`,
-                        timestamp: Date.now(),
-                        messages: newMessages,
-                        files: {},
-                      }]
-                    : s.checkpoints;
-                  if (shouldCheckpoint) setTimeout(() => sysMsg(`Auto-checkpoint saved.`), 100);
-                  const next = {
-                    ...s,
-                    messages: newMessages,
-                    lastAssistantMessage: accumulated,
-                    sessionCost: s.sessionCost + cost,
-                    checkpoints,
-                  };
-                  // Auto-save after every AI response
-                  setTimeout(() => { try { saveSession(next); } catch { /* non-critical */ } }, 0);
-                  return next;
-                });
-              }
-              break;
-
-            case 'error':
-              updateDisplay(streamId, { content: chunk.error ?? 'Unknown error', streaming: false, isError: true });
-              setMood('error');
-              break;
-          }
-        },
-        {
-          maxSteps: currentSession.maxSteps,
-          tools: allTools,
-          onToolCall: async (toolCall: ToolCall) => {
-            if (needsApproval(toolCall, currentSession.approvalMode)) {
-              setMood('waiting');
-              const perm = await requestPermission(toolCall);
-              if (perm.allowAll) setSession((s) => ({ ...s, approvalMode: 'full-auto' }));
-              setMood('thinking');
-              return perm;
-            }
-            return { allowed: true, allowAll: false };
-          },
-          onToolResult: (toolCall: ToolCall, output: string, diff?: unknown) => {
-            addDisplay({
-              role: 'tool',
-              content: `${toolCall.name} → ${output.slice(0, 300)}`,
-              toolName: toolCall.name,
-              streaming: false,
-            });
-            if (diff && typeof diff === 'object' && 'additions' in (diff as object)) {
-              const d = diff as { path: string; additions: number; deletions: number };
-              addDisplay({ role: 'system', content: `  ${d.path}  +${d.additions} -${d.deletions}` });
-            }
-          },
-          executeTool: async (toolCall: ToolCall) => {
-            await runHooks('PreToolUse', toolCall);
-
-            let result: { success: boolean; output: string };
-            if (mcpRef.current.isMcpTool(toolCall.name)) {
-              const r = await mcpRef.current.callTool(toolCall.name, toolCall.args as Record<string, unknown>);
-              result = { success: r.success, output: r.output };
-            } else {
-              result = await executorRef.current.execute(toolCall);
-            }
-
-            await runHooks('PostToolUse', toolCall, result.output);
-            return result;
-          },
-        },
-        currentSession.systemPrompt,
-        controller.signal,
-      );
-    };
-
-    try {
-      await run();
-    } catch (err) {
-      updateDisplay(streamId, {
-        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-        streaming: false,
-        isError: true,
-      });
-      setMood('error');
-    } finally {
-      setIsStreaming(false);
-      setMood((m) => (m === 'thinking' || m === 'waiting' ? 'idle' : m));
-      runHooks('Notification');
-    }
-  }, [isStreaming, session, addDisplay, updateDisplay, requestPermission, runHooks]);
+  }, [session, sysMsg, addDisplay, updateDisplay, exit, sendMessage, isStreaming]);
 
   // ── Input handling ────────────────────────────────────────────────────────────
 
@@ -1266,10 +1913,10 @@ export function App({ initialState }: AppProps): React.ReactElement {
 
     if (showPicker) {
       // Select the highlighted command from filtered list
-      const q = pickerQuery.toLowerCase();
-      const filtered = q
+      const qLower = pickerQuery.toLowerCase();
+      const filtered = qLower
         ? SLASH_COMMANDS.filter(
-            (c) => c.name.startsWith(q) || c.description.toLowerCase().includes(q) || c.trigger.includes(q),
+            (c) => c.name.startsWith(qLower) || c.description.toLowerCase().includes(qLower) || c.trigger.includes(qLower),
           )
         : SLASH_COMMANDS;
       const selected = filtered[Math.min(pickerSelectedIndex, filtered.length - 1)];
@@ -1298,6 +1945,18 @@ export function App({ initialState }: AppProps): React.ReactElement {
       if (inputChar === 'y') pendingPermission.resolve(true, false);
       else if (inputChar === 'a') pendingPermission.resolve(true, true);
       else if (inputChar === 'n') pendingPermission.resolve(false, false);
+      return;
+    }
+
+    // Pending test fix prompt
+    if (pendingTestFix !== null) {
+      if (inputChar === 'y' || inputChar === 'Y') {
+        const testOutput = pendingTestFix;
+        setPendingTestFix(null);
+        sendMessage(`Tests failed. Please fix the following test failures:\n\n${testOutput.slice(0, 4000)}`);
+      } else {
+        setPendingTestFix(null);
+      }
       return;
     }
 
@@ -1395,6 +2054,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
 
   const termHeight = stdout?.rows ?? 24;
   const maxMessages = Math.max(5, termHeight - 12);
+  const borderColor = isStreaming ? 'gray' : isMultiline ? theme.tool : theme.border;
 
   return (
     <Box flexDirection="column" height={termHeight}>
@@ -1409,12 +2069,13 @@ export function App({ initialState }: AppProps): React.ReactElement {
         persona={session.activePersona}
         sessionCost={session.sessionCost}
         version={pkg.version}
+        liveTokens={isStreaming ? streamingTokens : undefined}
       />
 
       {/* Message log — show last N messages */}
       <Box flexDirection="column" flexGrow={1} overflowY="hidden">
         {displayMessages.slice(-maxMessages).map((msg) => (
-          <MessageRow key={msg.id} msg={msg} />
+          <MessageRow key={msg.id} msg={msg} spinnerFrame={spinnerFrame} theme={theme} />
         ))}
       </Box>
 
@@ -1440,19 +2101,19 @@ export function App({ initialState }: AppProps): React.ReactElement {
       {/* Input area */}
       <Box
         borderStyle="round"
-        borderColor={isStreaming ? 'gray' : isMultiline ? 'cyan' : 'yellowBright'}
+        borderColor={borderColor as any}
         paddingX={1}
         flexDirection="row"
       >
-        <Text color={isStreaming ? 'gray' : isMultiline ? 'cyan' : 'yellowBright'}>
-          {isStreaming ? '⟳ ' : isMultiline ? '¶ ' : '❯ '}
+        <Text color={borderColor as any}>
+          {isStreaming ? `${SPINNER_FRAMES[spinnerFrame]} ` : isMultiline ? '¶ ' : '❯ '}
         </Text>
         {isMultiline ? (
           <Box flexDirection="column">
             {multilineBuffer.map((line, i) => (
               <Box key={i} flexDirection="row">
                 <Text color="gray" dimColor>{String(i + 1).padStart(2, ' ')} │ </Text>
-                <Text color="white">{line}</Text>
+                <Text color="white" wrap="wrap">{line}</Text>
               </Box>
             ))}
             <Box flexDirection="row">
@@ -1490,29 +2151,45 @@ export function App({ initialState }: AppProps): React.ReactElement {
 
 // ─── Message row component ─────────────────────────────────────────────────────
 
-function MessageRow({ msg }: { msg: DisplayMessage }): React.ReactElement {
+interface ThemeSubset {
+  primary: string;
+  accent: string;
+  tool: string;
+  system: string;
+  error: string;
+}
+
+function MessageRow({
+  msg,
+  spinnerFrame,
+  theme,
+}: {
+  msg: DisplayMessage;
+  spinnerFrame: number;
+  theme: ThemeSubset;
+}): React.ReactElement {
   const roleColors: Record<string, string> = {
-    user: 'yellowBright',
-    assistant: 'white',
-    system: 'gray',
-    tool: 'cyan',
+    user: theme.primary,
+    assistant: theme.accent,
+    system: theme.system,
+    tool: theme.tool,
   };
 
   const roleIcons: Record<string, string> = {
     user: '❯ ',
     assistant: '◈ ',
     system: '· ',
-    tool: '⟳ ',
+    tool: msg.streaming ? `${SPINNER_FRAMES[spinnerFrame]} ` : '⟳ ',
   };
 
-  const color = msg.isError ? 'red' : roleColors[msg.role] ?? 'white';
+  const color = msg.isError ? theme.error : roleColors[msg.role] ?? 'white';
   const icon = roleIcons[msg.role] ?? '  ';
 
   // Render assistant messages with markdown
   if (msg.role === 'assistant' && msg.content) {
     return (
       <Box flexDirection="row" marginBottom={0}>
-        <Text color="white">{icon}</Text>
+        <Text color={theme.accent as any}>{icon}</Text>
         <Box flexGrow={1} flexDirection="column">
           <MarkdownText content={msg.content} streaming={msg.streaming} />
         </Box>
@@ -1524,13 +2201,14 @@ function MessageRow({ msg }: { msg: DisplayMessage }): React.ReactElement {
     ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
     : null;
 
-  // Tool calls — show as compact inline box
+  // Tool calls — show as compact inline box (truncated, max 200 chars shown)
   if (msg.role === 'tool') {
+    const displayContent = msg.content;
     return (
       <Box flexDirection="row" marginBottom={0}>
-        <Text color="cyan" dimColor>{icon}</Text>
-        <Text color={msg.isError ? 'red' : 'cyan'} dimColor={!msg.isError}>
-          {msg.content}
+        <Text color={theme.tool as any} dimColor>{icon}</Text>
+        <Text color={msg.isError ? (theme.error as any) : (theme.tool as any)} dimColor={!msg.isError} wrap="wrap">
+          {displayContent}
           {msg.streaming && <Text color="gray"> ▌</Text>}
         </Text>
         {timeStr && <Text color="gray" dimColor>  {timeStr}</Text>}
@@ -1540,11 +2218,11 @@ function MessageRow({ msg }: { msg: DisplayMessage }): React.ReactElement {
 
   return (
     <Box flexDirection="row" marginBottom={0}>
-      <Text color={color} dimColor={msg.role === 'system'}>
+      <Text color={color as any} dimColor={msg.role === 'system'}>
         {icon}
       </Text>
       <Box flexGrow={1} flexWrap="wrap">
-        <Text color={color} dimColor={msg.role === 'system'}>
+        <Text color={color as any} dimColor={msg.role === 'system'} wrap="wrap">
           {msg.content}
           {msg.streaming && <Text color="gray"> ▌</Text>}
         </Text>

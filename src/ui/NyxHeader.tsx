@@ -30,6 +30,7 @@ interface NyxHeaderProps {
   sessionCost: number;
   version?: string;
   maxTokens?: number;
+  liveTokens?: number;
 }
 
 function tokenBar(count: number, max: number, width = 10): string {
@@ -49,6 +50,7 @@ export function NyxHeader({
   sessionCost,
   version = '3.0.0',
   maxTokens = 100_000,
+  liveTokens,
 }: NyxHeaderProps): React.ReactElement {
   const art = NYX_ART[mood];
   const providerConfig = PROVIDERS[provider];
@@ -94,6 +96,9 @@ export function NyxHeader({
         <Box flexDirection="row">
           <Text color="gray" dimColor>tokens    </Text>
           <Text color={tokenColor}>{tokenCount.toLocaleString()}</Text>
+          {liveTokens !== undefined && liveTokens > 0 && (
+            <Text color="yellowBright"> +{liveTokens.toLocaleString()}▌</Text>
+          )}
           <Text color={tokenColor} dimColor>  {bar}</Text>
           {approvalMode === 'auto-edit' && <Text color="yellow">  ⚡ auto-edit</Text>}
           {approvalMode === 'full-auto' && <Text color="red">  ⚡ full-auto</Text>}

@@ -161,9 +161,16 @@ async function runOllamaAgent(
   systemPrompt?: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  const history: Array<{ role: string; content: string }> = [];
+  type OllamaMsg = { role: string; content: string; images?: string[] };
+  const history: OllamaMsg[] = [];
   if (systemPrompt) history.push({ role: 'system', content: systemPrompt });
-  for (const m of messages) history.push({ role: m.role, content: m.content });
+  for (const m of messages) {
+    const entry: OllamaMsg = { role: m.role, content: m.content };
+    if (m.images && m.images.length > 0) {
+      entry.images = m.images.map((img) => img.base64);
+    }
+    history.push(entry);
+  }
 
   const tools = agentCfg.tools.map((t) => ({
     type: 'function',
@@ -257,10 +264,21 @@ async function runClaudeAgent(
   }));
 
   type AnthropicMsg = { role: 'user' | 'assistant'; content: string | unknown[] };
-  const history: AnthropicMsg[] = messages.map((m) => ({
-    role: m.role === 'assistant' ? 'assistant' : 'user',
-    content: m.content,
-  }));
+  const history: AnthropicMsg[] = messages.map((m) => {
+    if (m.images && m.images.length > 0) {
+      // Build content array with image blocks + text
+      const contentArr: unknown[] = m.images.map((img) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+      }));
+      contentArr.push({ type: 'text', text: m.content });
+      return { role: m.role === 'assistant' ? 'assistant' : 'user', content: contentArr };
+    }
+    return {
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content,
+    };
+  });
 
   for (let step = 0; step < agentCfg.maxSteps; step++) {
     if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
@@ -396,10 +414,22 @@ async function runOpenAIAgent(
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
 
-  type OAIMsg = { role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string };
+  type OAIMsg = { role: string; content: string | unknown[] | null; tool_calls?: unknown[]; tool_call_id?: string };
   const history: OAIMsg[] = [];
   if (systemPrompt) history.push({ role: 'system', content: systemPrompt });
-  for (const m of messages) history.push({ role: m.role, content: m.content });
+  for (const m of messages) {
+    if (m.images && m.images.length > 0) {
+      // Build content array with image_url blocks + text
+      const contentArr: unknown[] = m.images.map((img) => ({
+        type: 'image_url',
+        image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+      }));
+      contentArr.push({ type: 'text', text: m.content });
+      history.push({ role: m.role, content: contentArr });
+    } else {
+      history.push({ role: m.role, content: m.content });
+    }
+  }
 
   for (let step = 0; step < agentCfg.maxSteps; step++) {
     if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }

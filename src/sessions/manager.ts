@@ -6,9 +6,14 @@ import { PROVIDERS } from '../core/types.js';
 
 const SESSION_DIR = path.join(os.homedir(), '.localcode');
 const STATE_FILE  = path.join(SESSION_DIR, 'session.json');
+const SESSIONS_DIR = path.join(SESSION_DIR, 'sessions');
 
 function ensureDir(): void {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
+}
+
+function ensureSessionsDir(): void {
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 }
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -32,6 +37,74 @@ export function loadHooks(): HooksConfig {
   } catch {
     return {};
   }
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+
+const HISTORY_FILE = path.join(SESSION_DIR, 'history.json');
+const MAX_HISTORY = 200;
+
+export function saveHistory(entries: string[]): void {
+  try {
+    ensureDir();
+    const toSave = entries.slice(0, MAX_HISTORY);
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(toSave, null, 2), 'utf8');
+  } catch { /* non-critical */ }
+}
+
+export function loadHistory(): string[] {
+  try {
+    if (!fs.existsSync(HISTORY_FILE)) return [];
+    return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) as string[];
+  } catch {
+    return [];
+  }
+}
+
+// ── Templates ─────────────────────────────────────────────────────────────────
+
+export interface PromptTemplate {
+  name: string;
+  prompt: string;
+  description: string;
+}
+
+const TEMPLATES_FILE = path.join(SESSION_DIR, 'templates.json');
+
+export function loadTemplates(): PromptTemplate[] {
+  try {
+    if (!fs.existsSync(TEMPLATES_FILE)) return [];
+    return JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf8')) as PromptTemplate[];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTemplates(templates: PromptTemplate[]): void {
+  try {
+    ensureDir();
+    fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(templates, null, 2), 'utf8');
+  } catch { /* non-critical */ }
+}
+
+// ── Aliases ───────────────────────────────────────────────────────────────────
+
+const ALIASES_FILE = path.join(SESSION_DIR, 'aliases.json');
+
+export function loadAliases(): Record<string, string> {
+  try {
+    if (!fs.existsSync(ALIASES_FILE)) return {};
+    return JSON.parse(fs.readFileSync(ALIASES_FILE, 'utf8')) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+export function saveAliases(aliases: Record<string, string>): void {
+  try {
+    ensureDir();
+    fs.writeFileSync(ALIASES_FILE, JSON.stringify(aliases, null, 2), 'utf8');
+  } catch { /* non-critical */ }
 }
 
 // ── Session ───────────────────────────────────────────────────────────────────
@@ -96,6 +169,7 @@ export function loadSession(): SessionState {
     maxSteps: 20,
     sessionCost: 0,
     lastAssistantMessage: '',
+    theme: 'dark',
   };
 
   if (!fs.existsSync(STATE_FILE)) return defaults;
@@ -131,8 +205,103 @@ export function saveSession(state: SessionState): void {
     pinnedContext:  state.pinnedContext,
     autoCheckpoint: state.autoCheckpoint,
     maxSteps:       state.maxSteps,
+    theme:          state.theme,
   };
   fs.writeFileSync(STATE_FILE, JSON.stringify(toSave, null, 2), 'utf8');
+
+  // Also save a timestamped copy if there are messages
+  if (state.messages.length > 0) {
+    try {
+      ensureSessionsDir();
+      const cwdSlug = state.workingDir.replace(/[^a-zA-Z0-9]/g, '_').slice(-40);
+      const timestamp = Date.now();
+      const sessionId = `session_${timestamp}_${cwdSlug}`;
+      const sessionPath = path.join(SESSIONS_DIR, `${sessionId}.json`);
+      const sessionData = {
+        id: sessionId,
+        timestamp,
+        cwd: state.workingDir,
+        messageCount: state.messages.length,
+        provider: state.provider,
+        model: state.model,
+        messages: state.messages,
+        checkpoints: state.checkpoints,
+      };
+      fs.writeFileSync(sessionPath, JSON.stringify(sessionData, null, 2), 'utf8');
+
+      // Keep only last 50 sessions
+      const files = fs.readdirSync(SESSIONS_DIR)
+        .filter((f) => f.endsWith('.json'))
+        .map((f) => ({ f, mtime: fs.statSync(path.join(SESSIONS_DIR, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+      for (const { f } of files.slice(50)) {
+        try { fs.unlinkSync(path.join(SESSIONS_DIR, f)); } catch { /* ok */ }
+      }
+    } catch { /* non-critical */ }
+  }
+}
+
+// ── Session history browser ───────────────────────────────────────────────────
+
+export interface SessionSummary {
+  id: string;
+  timestamp: number;
+  cwd: string;
+  messageCount: number;
+  provider: string;
+  model: string;
+}
+
+export function listSessions(): SessionSummary[] {
+  try {
+    ensureSessionsDir();
+    return fs.readdirSync(SESSIONS_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8')) as SessionSummary & { messages?: unknown[] };
+          return {
+            id: data.id,
+            timestamp: data.timestamp,
+            cwd: data.cwd,
+            messageCount: data.messageCount ?? (Array.isArray(data.messages) ? data.messages.length : 0),
+            provider: data.provider,
+            model: data.model,
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((s): s is SessionSummary => s !== null)
+      .sort((a, b) => b.timestamp - a.timestamp);
+  } catch {
+    return [];
+  }
+}
+
+export function loadSessionById(id: string): SessionState | null {
+  try {
+    const filePath = path.join(SESSIONS_DIR, `${id}.json`);
+    if (!fs.existsSync(filePath)) return null;
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8')) as {
+      messages: Message[];
+      checkpoints?: Checkpoint[];
+      provider?: Provider;
+      model?: string;
+      cwd?: string;
+    };
+    const base = loadSession();
+    return {
+      ...base,
+      messages: data.messages ?? [],
+      checkpoints: data.checkpoints ?? [],
+      provider: (data.provider ?? base.provider) as Provider,
+      model: data.model ?? base.model,
+      workingDir: data.cwd ?? base.workingDir,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function createCheckpoint(
