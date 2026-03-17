@@ -118,4 +118,4 @@ Run `/help` inside LocalCode to see the full list.
 
 ## License
 
-MIT — see the [LocalCode repository](https://github.com/thealxlabs/localcode) for details.
+MIT — see the [LocalCode repository](https://github.com/TheLocalCodeTeam/localcode) for details.

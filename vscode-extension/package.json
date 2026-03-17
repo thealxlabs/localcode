@@ -1,5 +1,5 @@
 {
-  "name": "LocalCodeByTheAlxLabs",
+  "name": "localcode",
   "displayName": "LocalCode by TheAlxLabs",
   "description": "AI coding assistant in your terminal. Powered by Ollama, Claude, OpenAI, or Groq.",
   "version": "1.0.0",
@@ -12,7 +12,7 @@
   "keywords": ["ai", "ollama", "claude", "coding", "assistant", "localcode"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/thealxlabs/localcode.git"
+    "url": "https://github.com/TheLocalCodeTeam/localcode.git"
   },
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",

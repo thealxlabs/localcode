@@ -8,7 +8,7 @@ Supports Ollama (free, fully local), Claude, OpenAI, and Groq — with a rich TU
 [![npm version](https://img.shields.io/npm/v/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
 [![npm downloads](https://img.shields.io/npm/dm/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/LocalCodeByTheAlxLabs.localcode.svg?style=flat-square&label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=LocalCodeByTheAlxLabs.localcode)
-[![GitHub stars](https://img.shields.io/github/stars/thealxlabs/localcode.svg?style=flat-square)](https://github.com/thealxlabs/localcode/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/TheLocalCodeTeam/localcode.svg?style=flat-square)](https://github.com/TheLocalCodeTeam/localcode/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
 ```
@@ -24,7 +24,7 @@ Supports Ollama (free, fully local), Claude, OpenAI, and Groq — with a rich TU
 
 **One-liner:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thealxlabs/localcode/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/TheLocalCodeTeam/localcode/main/install.sh | sh
 ```
 
 **npm:**
@@ -42,7 +42,7 @@ npx @localcode/cli
 
 **Build from source:**
 ```bash
-git clone https://github.com/thealxlabs/localcode.git
+git clone https://github.com/TheLocalCodeTeam/localcode.git
 cd localcode
 npm install && npm run build
 npm link

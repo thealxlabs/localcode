@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # LocalCode installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/thealxlabs/localcode/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/TheLocalCodeTeam/localcode/main/install.sh | sh
 
 set -e
 
