@@ -1,6 +1,6 @@
 {
   "name": "localcode-vscode",
-  "displayName": "LocalCode — Nyx AI",
+  "displayName": "LocalCode by TheAlxLabs",
   "description": "AI coding assistant in your terminal. Powered by Ollama, Claude, OpenAI, or Groq.",
   "version": "1.0.0",
   "publisher": "thealxlabs",
