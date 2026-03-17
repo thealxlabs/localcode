@@ -3,6 +3,8 @@
 **Local-first, open-source AI coding assistant for your terminal.**
 Supports Ollama (free, fully local), Claude, OpenAI, and Groq — with a rich TUI inspired by Claude Code.
 
+![LocalCode demo](demo.gif)
+
 [![npm version](https://img.shields.io/npm/v/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
 [![npm downloads](https://img.shields.io/npm/dm/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
 [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/LocalCodeByTheAlxLabs.localcode.svg?style=flat-square&label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=LocalCodeByTheAlxLabs.localcode)
