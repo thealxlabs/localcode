@@ -3,8 +3,7 @@
   "displayName": "LocalCode by TheAlxLabs",
   "description": "AI coding assistant in your terminal. Powered by Ollama, Claude, OpenAI, or Groq.",
   "version": "1.0.0",
-  "publisher": "thealxlabs",
-  "icon": "icon.png",
+  "publisher": "LocalCodeByTheAlxLabs",
   "engines": {
     "vscode": "^1.85.0"
   },
