@@ -5,14 +5,36 @@ import { Box, Text } from 'ink';
 const TOOL_DESCRIPTIONS = {
     write_file: 'Write file',
     patch_file: 'Patch file',
+    delete_file: 'Delete file',
+    move_file: 'Move file',
     run_shell: 'Run shell command',
     git_operation: 'Git operation',
     read_file: 'Read file',
     list_dir: 'List directory',
 };
-const SENSITIVE_TOOLS = new Set(['write_file', 'patch_file', 'run_shell', 'git_operation']);
+const SENSITIVE_TOOLS = new Set([
+    'write_file',
+    'patch_file',
+    'delete_file',
+    'move_file',
+    'run_shell',
+    'git_operation',
+]);
+export function needsApproval(toolCall, mode) {
+    switch (mode) {
+        case 'full-auto':
+            return false;
+        case 'auto-edit':
+            // Only shell needs approval; file ops are auto-approved
+            return toolCall.name === 'run_shell';
+        case 'suggest':
+        default:
+            return SENSITIVE_TOOLS.has(toolCall.name);
+    }
+}
+// Backwards-compatible alias — always uses 'suggest' mode
 export function needsPermission(toolCall) {
-    return SENSITIVE_TOOLS.has(toolCall.name);
+    return needsApproval(toolCall, 'suggest');
 }
 function formatArgs(args) {
     const parts = [];

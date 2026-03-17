@@ -1838,24 +1838,42 @@ ${msgHtml}
       }
 
       case '/ping': {
-        sysMsg(`Testing connection to ${PROVIDERS[session.provider].displayName}…`);
-        setMood('thinking');
-        try {
-          const startMs = Date.now();
-          await streamProvider(
-            session.provider,
-            session.apiKeys,
-            session.model,
-            [{ role: 'user', content: 'Reply with only: pong' }],
-            () => {},
-          );
-          const ms = Date.now() - startMs;
-          sysMsg(`✓ ${PROVIDERS[session.provider].displayName} responded in ${ms}ms  (model: ${session.model})`);
-          setMood('happy');
-        } catch (err) {
-          sysMsg(`✕ Connection failed: ${err instanceof Error ? err.message : String(err)}`, true);
-          setMood('error');
+        const pingAll = args === 'all';
+        const providersToPing: Provider[] = pingAll
+          ? (Object.keys(PROVIDERS) as Provider[]).filter(p => !PROVIDERS[p].requiresKey || session.apiKeys[p])
+          : [session.provider];
+
+        if (pingAll) {
+          sysMsg(`Pinging ${providersToPing.length} configured providers…`);
+        } else {
+          sysMsg(`Testing connection to ${PROVIDERS[session.provider].displayName}…`);
         }
+        setMood('thinking');
+
+        const pingResults: string[] = [];
+        await Promise.all(providersToPing.map(async (p) => {
+          try {
+            const startMs = Date.now();
+            await streamProvider(
+              p,
+              session.apiKeys,
+              PROVIDERS[p].defaultModel,
+              [{ role: 'user', content: 'Reply with only: pong' }],
+              () => {},
+            );
+            const ms = Date.now() - startMs;
+            pingResults.push(`  ✓  ${PROVIDERS[p].displayName.padEnd(10)}  ${ms}ms`);
+          } catch (err) {
+            pingResults.push(`  ✕  ${PROVIDERS[p].displayName.padEnd(10)}  ${err instanceof Error ? err.message.slice(0, 50) : 'failed'}`);
+          }
+        }));
+
+        if (pingAll) {
+          sysMsg(`Ping results:\n${pingResults.join('\n')}`);
+        } else {
+          sysMsg(pingResults[0] ?? '✕ No result');
+        }
+        setMood(pingResults.every(r => r.startsWith('  ✓')) ? 'happy' : 'error');
         return;
       }
 

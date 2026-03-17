@@ -47,7 +47,7 @@ export function Setup({ onComplete }) {
             model: defaultModel,
             messages: [],
             checkpoints: [],
-            allowAllTools: false,
+            approvalMode: 'suggest',
             workingDir: process.cwd(),
             apiKeys: finalKey ? { [finalProvider]: finalKey } : {},
             systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -55,8 +55,10 @@ export function Setup({ onComplete }) {
             activePersona: 'pair-programmer',
             pinnedContext: [],
             autoCheckpoint: true,
+            maxSteps: 20,
             sessionCost: 0,
             lastAssistantMessage: '',
+            theme: 'dark',
         };
         if (process.env.ANTHROPIC_API_KEY)
             session.apiKeys.claude = process.env.ANTHROPIC_API_KEY;
@@ -123,7 +125,7 @@ export function Setup({ onComplete }) {
                     " ")),
             React.createElement(Box, { flexDirection: "column", justifyContent: "center" },
                 React.createElement(Text, { bold: true, color: "yellowBright" }, "LocalCode"),
-                React.createElement(Text, { color: "gray", dimColor: true }, "v2.3 \u00B7 @localcode/cli"),
+                React.createElement(Text, { color: "gray", dimColor: true }, "v3.1.0 \u00B7 @localcode/cli"),
                 React.createElement(Text, { color: "gray", dimColor: true }, "by TheAlxLabs \u00B7 co-piloted by Nyx"))),
         React.createElement(Box, { borderStyle: "single", borderColor: "gray", paddingX: 2, paddingY: 0, marginBottom: 1 },
             step === 'welcome' && (React.createElement(Box, { flexDirection: "column" },

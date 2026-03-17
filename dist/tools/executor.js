@@ -2,15 +2,12 @@
 // Executes tool calls made by the model
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
+import { execFile } from 'child_process';
 function buildDiff(filePath, before, after) {
     const beforeLines = before.split('\n');
     const afterLines = after.split('\n');
     let additions = 0;
     let deletions = 0;
-    // Simple line-level count (not full Myers diff, but good enough for display)
     const beforeSet = new Set(beforeLines);
     const afterSet = new Set(afterLines);
     for (const l of afterLines)
@@ -24,9 +21,9 @@ function buildDiff(filePath, before, after) {
 export class ToolExecutor {
     workingDir;
     sessionFiles = {}; // path -> original content before first edit
-    changeHistory = []; // ordered list for undo
+    changeHistory = [];
     constructor(workingDir) {
-        this.workingDir = workingDir;
+        this.workingDir = path.resolve(workingDir);
     }
     async execute(tool) {
         try {
@@ -34,8 +31,12 @@ export class ToolExecutor {
                 case 'read_file': return this.readFile(tool.args);
                 case 'write_file': return this.writeFile(tool.args);
                 case 'patch_file': return this.patchFile(tool.args);
+                case 'delete_file': return this.deleteFile(tool.args);
+                case 'move_file': return this.moveFile(tool.args);
                 case 'run_shell': return this.runShell(tool.args);
                 case 'list_dir': return this.listDir(tool.args);
+                case 'search_files': return this.searchFiles(tool.args);
+                case 'find_files': return this.findFiles(tool.args);
                 case 'git_operation': return this.gitOperation(tool.args);
                 default:
                     return { success: false, output: `Unknown tool: ${tool.name}` };
@@ -47,7 +48,11 @@ export class ToolExecutor {
         }
     }
     resolvePath(p) {
-        return path.isAbsolute(p) ? p : path.resolve(this.workingDir, p);
+        const resolved = path.isAbsolute(p) ? path.normalize(p) : path.resolve(this.workingDir, p);
+        if (!resolved.startsWith(this.workingDir + path.sep) && resolved !== this.workingDir) {
+            throw new Error(`Path denied: "${p}" is outside working directory`);
+        }
+        return resolved;
     }
     readFile(args) {
         const abs = this.resolvePath(args.path);
@@ -77,25 +82,60 @@ export class ToolExecutor {
         if (!before.includes(args.old_str)) {
             return { success: false, output: `old_str not found in ${args.path}` };
         }
+        // Count occurrences — ambiguous patch is an error
+        let count = 0;
+        let idx = 0;
+        while ((idx = before.indexOf(args.old_str, idx)) !== -1) {
+            count++;
+            idx += args.old_str.length;
+        }
+        if (count > 1) {
+            return { success: false, output: `old_str appears ${count} times in ${args.path} — make it more specific` };
+        }
         if (!this.sessionFiles[abs])
             this.sessionFiles[abs] = before;
         this.changeHistory.push({ path: abs, before });
-        const after = before.replace(args.old_str, args.new_str);
+        // Use replacer fn to prevent $& / $` / $' / $1 substitution in new_str
+        const after = before.replace(args.old_str, () => args.new_str);
         fs.writeFileSync(abs, after, 'utf8');
         const diff = buildDiff(abs, before, after);
         return { success: true, output: `Patched: ${args.path}`, diff };
     }
-    async runShell(args) {
+    deleteFile(args) {
+        const abs = this.resolvePath(args.path);
+        if (!fs.existsSync(abs)) {
+            return { success: false, output: `File not found: ${args.path}` };
+        }
+        const before = fs.readFileSync(abs, 'utf8');
+        if (!this.sessionFiles[abs])
+            this.sessionFiles[abs] = before;
+        this.changeHistory.push({ path: abs, before });
+        fs.rmSync(abs, { recursive: false });
+        return { success: true, output: `Deleted: ${args.path}` };
+    }
+    moveFile(args) {
+        const src = this.resolvePath(args.source);
+        const dest = this.resolvePath(args.destination);
+        if (!fs.existsSync(src)) {
+            return { success: false, output: `Source not found: ${args.source}` };
+        }
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.renameSync(src, dest);
+        return { success: true, output: `Moved: ${args.source} → ${args.destination}` };
+    }
+    runShell(args) {
         const cwd = args.cwd ? this.resolvePath(args.cwd) : this.workingDir;
-        try {
-            const { stdout, stderr } = await execAsync(args.command, { cwd, timeout: 30000 });
-            const output = [stdout, stderr].filter(Boolean).join('\n').trim();
-            return { success: true, output: output || '(no output)' };
-        }
-        catch (err) {
-            const output = [err.stdout, err.stderr].filter(Boolean).join('\n').trim();
-            return { success: false, output: output || err.message };
-        }
+        return new Promise((resolve) => {
+            execFile('sh', ['-c', args.command], { cwd, timeout: 30000 }, (err, stdout, stderr) => {
+                const output = [stdout, stderr].filter(Boolean).join('\n').trim();
+                if (err) {
+                    resolve({ success: false, output: output || err.message });
+                }
+                else {
+                    resolve({ success: true, output: output || '(no output)' });
+                }
+            });
+        });
     }
     listDir(args) {
         const abs = this.resolvePath(args.path);
@@ -117,8 +157,76 @@ export class ToolExecutor {
         };
         return { success: true, output: walk(abs).join('\n') };
     }
-    async gitOperation(args) {
-        return this.runShell({ command: `git ${args.args}`, cwd: this.workingDir });
+    searchFiles(args) {
+        const searchPath = args.path ? this.resolvePath(args.path) : this.workingDir;
+        const grepArgs = [
+            '--recursive',
+            '--line-number',
+            '--with-filename',
+            '--exclude-dir=node_modules',
+            '--exclude-dir=.git',
+            '--exclude-dir=dist',
+            '--exclude-dir=.next',
+            ...(args.case_insensitive ? ['--ignore-case'] : []),
+            args.pattern,
+            searchPath,
+        ];
+        return new Promise((resolve) => {
+            execFile('grep', grepArgs, { timeout: 15000 }, (err, stdout, stderr) => {
+                if (err && err.code !== '1' && Number(err.code) !== 1 && !stdout) {
+                    resolve({ success: false, output: stderr || err.message });
+                }
+                else {
+                    const out = stdout.trim();
+                    // Make paths relative for readability
+                    const relative = out.split('\n').map((line) => {
+                        const abs2 = line.split(':')[0];
+                        if (abs2 && path.isAbsolute(abs2)) {
+                            return line.replace(abs2, path.relative(this.workingDir, abs2));
+                        }
+                        return line;
+                    }).join('\n');
+                    resolve({ success: true, output: relative || 'No matches found' });
+                }
+            });
+        });
+    }
+    findFiles(args) {
+        const searchDir = args.path ? this.resolvePath(args.path) : this.workingDir;
+        const findArgs = [
+            searchDir,
+            '-not', '-path', '*/node_modules/*',
+            '-not', '-path', '*/.git/*',
+            '-not', '-path', '*/dist/*',
+            '-name', args.pattern,
+        ];
+        return new Promise((resolve) => {
+            execFile('find', findArgs, { timeout: 10000 }, (err, stdout, stderr) => {
+                if (err && !stdout) {
+                    resolve({ success: false, output: stderr || err.message });
+                }
+                else {
+                    const results = stdout.trim().split('\n').filter(Boolean)
+                        .map((p) => path.relative(this.workingDir, p))
+                        .join('\n');
+                    resolve({ success: true, output: results || 'No files found' });
+                }
+            });
+        });
+    }
+    gitOperation(args) {
+        const gitArgs = args.args.trim().split(/\s+/).filter(Boolean);
+        return new Promise((resolve) => {
+            execFile('git', gitArgs, { cwd: this.workingDir, timeout: 30000 }, (err, stdout, stderr) => {
+                const output = [stdout, stderr].filter(Boolean).join('\n').trim();
+                if (err) {
+                    resolve({ success: false, output: output || err.message });
+                }
+                else {
+                    resolve({ success: true, output: output || '(no output)' });
+                }
+            });
+        });
     }
     getSessionFiles() {
         return this.sessionFiles;
@@ -129,6 +237,65 @@ export class ToolExecutor {
             return null;
         fs.writeFileSync(last.path, last.before, 'utf8');
         return last.path;
+    }
+    // Build a unified diff between original and current content for a file
+    unifiedDiff(filePath) {
+        const before = this.sessionFiles[filePath];
+        if (before === undefined)
+            return null;
+        const after = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+        if (before === after)
+            return null;
+        const beforeLines = before.split('\n');
+        const afterLines = after.split('\n');
+        const relPath = path.relative(this.workingDir, filePath);
+        const hunks = [`--- a/${relPath}`, `+++ b/${relPath}`];
+        // Simple unified diff: find changed regions with 3-line context
+        const CONTEXT = 3;
+        let i = 0;
+        let j = 0;
+        const changes = [];
+        // LCS-lite: line by line comparison collecting changes
+        while (i < beforeLines.length || j < afterLines.length) {
+            if (i < beforeLines.length && j < afterLines.length && beforeLines[i] === afterLines[j]) {
+                changes.push({ type: ' ', line: beforeLines[i] });
+                i++;
+                j++;
+            }
+            else if (j < afterLines.length && (i >= beforeLines.length || beforeLines[i] !== afterLines[j])) {
+                changes.push({ type: '+', line: afterLines[j] });
+                j++;
+            }
+            else {
+                changes.push({ type: '-', line: beforeLines[i] });
+                i++;
+            }
+        }
+        // Group into hunks with context
+        let k = 0;
+        while (k < changes.length) {
+            if (changes[k].type !== ' ') {
+                const start = Math.max(0, k - CONTEXT);
+                let end = k;
+                while (end < changes.length && (changes[end].type !== ' ' || end - k < CONTEXT))
+                    end++;
+                end = Math.min(changes.length - 1, end + CONTEXT);
+                const hunkLines = changes.slice(start, end + 1);
+                const oldStart = changes.slice(0, start).filter((c) => c.type !== '+').length + 1;
+                const newStart = changes.slice(0, start).filter((c) => c.type !== '-').length + 1;
+                const oldCount = hunkLines.filter((c) => c.type !== '+').length;
+                const newCount = hunkLines.filter((c) => c.type !== '-').length;
+                hunks.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
+                for (const c of hunkLines) {
+                    hunks.push(`${c.type}${c.line}`);
+                }
+                k = end + 1;
+            }
+            else {
+                k++;
+            }
+        }
+        return hunks.join('\n');
     }
 }
 //# sourceMappingURL=executor.js.map

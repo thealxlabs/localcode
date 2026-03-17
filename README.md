@@ -3,8 +3,14 @@
 **Local-first, open-source AI coding assistant for your terminal.**
 Supports Ollama (free, fully local), Claude, OpenAI, and Groq — with a rich TUI inspired by Claude Code.
 
+[![npm version](https://img.shields.io/npm/v/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
+[![npm downloads](https://img.shields.io/npm/dm/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/LocalCodeByTheAlxLabs.localcode.svg?style=flat-square&label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=LocalCodeByTheAlxLabs.localcode)
+[![GitHub stars](https://img.shields.io/github/stars/thealxlabs/localcode.svg?style=flat-square)](https://github.com/thealxlabs/localcode/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+
 ```
- /\_/\   LocalCode  v3.0.0  ·  open source
+ /\_/\   LocalCode  v3.1.0  ·  open source
 ( ·.· )  provider  Ollama  qwen2.5-coder:7b
  > ♥ <   cwd       ~/my-project
          tokens    0  ░░░░░░░░░░  0%
@@ -14,19 +20,25 @@ Supports Ollama (free, fully local), Claude, OpenAI, and Groq — with a rich TU
 
 ## Install
 
+**One-liner:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/thealxlabs/localcode/main/install.sh | sh
+```
+
+**npm:**
 ```bash
 npm install -g @localcode/cli
 localcode
 ```
 
-Or run directly:
-
+**Run without installing:**
 ```bash
 npx @localcode/cli
 ```
 
-Or clone and build:
+**VS Code extension:** search `LocalCode` in the Extensions panel, or [install from Marketplace](https://marketplace.visualstudio.com/items?itemName=LocalCodeByTheAlxLabs.localcode).
 
+**Build from source:**
 ```bash
 git clone https://github.com/thealxlabs/localcode.git
 cd localcode

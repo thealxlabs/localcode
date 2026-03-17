@@ -28,7 +28,7 @@ export interface AgentConfig {
         diff?: unknown;
     }>;
 }
-export declare function runAgent(provider: Provider, apiKeys: Partial<Record<Provider, string>>, model: string, messages: Message[], onChunk: ChunkCallback, agentCfg: AgentConfig, systemPrompt?: string): Promise<void>;
+export declare function runAgent(provider: Provider, apiKeys: Partial<Record<Provider, string>>, model: string, messages: Message[], onChunk: ChunkCallback, agentCfg: AgentConfig, systemPrompt?: string, signal?: AbortSignal): Promise<void>;
 export declare function streamProvider(provider: Provider, apiKeys: Partial<Record<Provider, string>>, model: string, messages: Message[], onChunk: ChunkCallback, systemPrompt?: string): Promise<void>;
 export declare function estimateCost(model: string, inputTokens: number, outputTokens: number): number;
 export declare function listModels(provider: Provider, apiKeys: Partial<Record<Provider, string>>): Promise<string[]>;

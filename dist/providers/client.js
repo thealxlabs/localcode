@@ -26,15 +26,36 @@ export const BUILTIN_TOOLS = [
     },
     {
         name: 'patch_file',
-        description: 'Replace a specific string in a file with new content',
+        description: 'Replace a specific string in a file with new content. old_str must be unique in the file.',
         parameters: {
             type: 'object',
             properties: {
                 path: { type: 'string', description: 'File path to patch' },
-                old_str: { type: 'string', description: 'Exact string to replace' },
+                old_str: { type: 'string', description: 'Exact string to replace (must appear exactly once)' },
                 new_str: { type: 'string', description: 'Replacement string' },
             },
             required: ['path', 'old_str', 'new_str'],
+        },
+    },
+    {
+        name: 'delete_file',
+        description: 'Delete a file',
+        parameters: {
+            type: 'object',
+            properties: { path: { type: 'string', description: 'File path to delete' } },
+            required: ['path'],
+        },
+    },
+    {
+        name: 'move_file',
+        description: 'Move or rename a file',
+        parameters: {
+            type: 'object',
+            properties: {
+                source: { type: 'string', description: 'Source file path' },
+                destination: { type: 'string', description: 'Destination file path' },
+            },
+            required: ['source', 'destination'],
         },
     },
     {
@@ -62,35 +83,69 @@ export const BUILTIN_TOOLS = [
         },
     },
     {
+        name: 'search_files',
+        description: 'Search file contents using a regex or string pattern (like grep -rn). Excludes node_modules, .git, dist.',
+        parameters: {
+            type: 'object',
+            properties: {
+                pattern: { type: 'string', description: 'Search pattern (regex or string)' },
+                path: { type: 'string', description: 'Directory to search in (optional, defaults to working directory)' },
+                case_insensitive: { type: 'boolean', description: 'Case-insensitive search' },
+            },
+            required: ['pattern'],
+        },
+    },
+    {
+        name: 'find_files',
+        description: 'Find files by name pattern (like find -name). Supports wildcards e.g. "*.ts", "*.test.*"',
+        parameters: {
+            type: 'object',
+            properties: {
+                pattern: { type: 'string', description: 'Filename pattern with optional wildcards e.g. "*.ts"' },
+                path: { type: 'string', description: 'Directory to search in (optional)' },
+            },
+            required: ['pattern'],
+        },
+    },
+    {
         name: 'git_operation',
         description: 'Run a git command',
         parameters: {
             type: 'object',
             properties: {
-                args: { type: 'string', description: 'Git arguments (e.g. "status", "diff HEAD")' },
+                args: { type: 'string', description: 'Git arguments (e.g. "status", "diff HEAD", "log --oneline -10")' },
             },
             required: ['args'],
         },
     },
 ];
 // ─── Ollama agent ─────────────────────────────────────────────────────────────
-async function runOllamaAgent(config, model, messages, onChunk, agentCfg, systemPrompt) {
-    // Build message list with system prompt
+async function runOllamaAgent(config, model, messages, onChunk, agentCfg, systemPrompt, signal) {
     const history = [];
     if (systemPrompt)
         history.push({ role: 'system', content: systemPrompt });
-    for (const m of messages)
-        history.push({ role: m.role, content: m.content });
+    for (const m of messages) {
+        const entry = { role: m.role, content: m.content };
+        if (m.images && m.images.length > 0) {
+            entry.images = m.images.map((img) => img.base64);
+        }
+        history.push(entry);
+    }
     const tools = agentCfg.tools.map((t) => ({
         type: 'function',
         function: { name: t.name, description: t.description, parameters: t.parameters },
     }));
     for (let step = 0; step < agentCfg.maxSteps; step++) {
+        if (signal?.aborted) {
+            await onChunk({ type: 'error', error: 'Cancelled.' });
+            return;
+        }
         await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
         const res = await fetch(`${config.baseUrl}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model, messages: history, stream: true, tools }),
+            signal,
         });
         if (!res.ok || !res.body) {
             await onChunk({ type: 'error', error: `Ollama error ${res.status}: ${await res.text()}` });
@@ -102,6 +157,11 @@ async function runOllamaAgent(config, model, messages, onChunk, agentCfg, system
         let assistantText = '';
         const toolCalls = [];
         while (true) {
+            if (signal?.aborted) {
+                reader.cancel();
+                await onChunk({ type: 'error', error: 'Cancelled.' });
+                return;
+            }
             const { done, value } = await reader.read();
             if (done)
                 break;
@@ -129,15 +189,16 @@ async function runOllamaAgent(config, model, messages, onChunk, agentCfg, system
                 catch { /* skip */ }
             }
         }
-        // Add assistant turn to history
         history.push({ role: 'assistant', content: assistantText });
-        // No tool calls → agent is done
         if (!toolCalls.length) {
             await onChunk({ type: 'done' });
             return;
         }
-        // Execute tool calls
         for (const toolCall of toolCalls) {
+            if (signal?.aborted) {
+                await onChunk({ type: 'error', error: 'Cancelled.' });
+                return;
+            }
             const perm = await agentCfg.onToolCall(toolCall, step);
             if (!perm.allowed) {
                 history.push({ role: 'tool', content: `Tool call denied by user: ${toolCall.name}` });
@@ -145,18 +206,13 @@ async function runOllamaAgent(config, model, messages, onChunk, agentCfg, system
             }
             const result = await agentCfg.executeTool(toolCall);
             agentCfg.onToolResult(toolCall, result.output, result.diff);
-            // Feed result back
-            history.push({
-                role: 'tool',
-                content: result.output.slice(0, 8000),
-            });
+            history.push({ role: 'tool', content: result.output.slice(0, 8000) });
         }
     }
-    // Hit max steps
-    await onChunk({ type: 'error', error: `Agent reached max steps (${agentCfg.maxSteps}). Use /agent --steps N to increase.` });
+    await onChunk({ type: 'error', error: `Agent reached max steps (${agentCfg.maxSteps}). Use /steps <n> to increase.` });
 }
 // ─── Claude agent ──────────────────────────────────────────────────────────────
-async function runClaudeAgent(config, model, messages, onChunk, agentCfg, systemPrompt) {
+async function runClaudeAgent(config, model, messages, onChunk, agentCfg, systemPrompt, signal) {
     if (!config.apiKey) {
         await onChunk({ type: 'error', error: 'No Anthropic API key. Use /apikey sk-ant-...' });
         return;
@@ -166,11 +222,26 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
         description: t.description,
         input_schema: t.parameters,
     }));
-    const history = messages.map((m) => ({
-        role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.content,
-    }));
+    const history = messages.map((m) => {
+        if (m.images && m.images.length > 0) {
+            // Build content array with image blocks + text
+            const contentArr = m.images.map((img) => ({
+                type: 'image',
+                source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+            }));
+            contentArr.push({ type: 'text', text: m.content });
+            return { role: m.role === 'assistant' ? 'assistant' : 'user', content: contentArr };
+        }
+        return {
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: m.content,
+        };
+    });
     for (let step = 0; step < agentCfg.maxSteps; step++) {
+        if (signal?.aborted) {
+            await onChunk({ type: 'error', error: 'Cancelled.' });
+            return;
+        }
         await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
         const res = await fetch(`${config.baseUrl}/v1/messages`, {
             method: 'POST',
@@ -187,6 +258,7 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
                 tools: claudeTools,
                 stream: true,
             }),
+            signal,
         });
         if (!res.ok || !res.body) {
             await onChunk({ type: 'error', error: `Claude error ${res.status}: ${await res.text()}` });
@@ -202,6 +274,11 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
         let currentToolInput = '';
         let stopReason = '';
         while (true) {
+            if (signal?.aborted) {
+                reader.cancel();
+                await onChunk({ type: 'error', error: 'Cancelled.' });
+                return;
+            }
             const { done, value } = await reader.read();
             if (done)
                 break;
@@ -243,7 +320,6 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
                 catch { /* skip */ }
             }
         }
-        // Build assistant message content for history
         const assistantContent = [];
         if (assistantText)
             assistantContent.push({ type: 'text', text: assistantText });
@@ -256,14 +332,16 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
             }
         }
         history.push({ role: 'assistant', content: assistantContent });
-        // No tool calls or end_turn → done
         if (!toolUses.length || stopReason === 'end_turn') {
             await onChunk({ type: 'done' });
             return;
         }
-        // Execute tools, build tool_result message
         const toolResults = [];
         for (const tu of toolUses) {
+            if (signal?.aborted) {
+                await onChunk({ type: 'error', error: 'Cancelled.' });
+                return;
+            }
             let parsedInput = {};
             try {
                 parsedInput = JSON.parse(tu.input || '{}');
@@ -277,18 +355,14 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
                 agentCfg.onToolResult(toolCall, result.output, result.diff);
                 resultContent = result.output.slice(0, 8000);
             }
-            toolResults.push({
-                type: 'tool_result',
-                tool_use_id: tu.id,
-                content: resultContent,
-            });
+            toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: resultContent });
         }
         history.push({ role: 'user', content: toolResults });
     }
     await onChunk({ type: 'error', error: `Agent reached max steps (${agentCfg.maxSteps}).` });
 }
 // ─── OpenAI-compatible agent (OpenAI + Groq) ─────────────────────────────────
-async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCfg, providerName, systemPrompt) {
+async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCfg, providerName, systemPrompt, signal) {
     if (!apiKey) {
         await onChunk({ type: 'error', error: `No ${providerName} API key. Use /apikey ...` });
         return;
@@ -300,14 +374,31 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
     const history = [];
     if (systemPrompt)
         history.push({ role: 'system', content: systemPrompt });
-    for (const m of messages)
-        history.push({ role: m.role, content: m.content });
+    for (const m of messages) {
+        if (m.images && m.images.length > 0) {
+            // Build content array with image_url blocks + text
+            const contentArr = m.images.map((img) => ({
+                type: 'image_url',
+                image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+            }));
+            contentArr.push({ type: 'text', text: m.content });
+            history.push({ role: m.role, content: contentArr });
+        }
+        else {
+            history.push({ role: m.role, content: m.content });
+        }
+    }
     for (let step = 0; step < agentCfg.maxSteps; step++) {
+        if (signal?.aborted) {
+            await onChunk({ type: 'error', error: 'Cancelled.' });
+            return;
+        }
         await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
         const res = await fetch(`${baseUrl}/v1/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
             body: JSON.stringify({ model, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
+            signal,
         });
         if (!res.ok || !res.body) {
             await onChunk({ type: 'error', error: `${providerName} error ${res.status}: ${await res.text()}` });
@@ -320,6 +411,11 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
         const tcAccum = {};
         let finishReason = '';
         while (true) {
+            if (signal?.aborted) {
+                reader.cancel();
+                await onChunk({ type: 'error', error: 'Cancelled.' });
+                return;
+            }
             const { done, value } = await reader.read();
             if (done)
                 break;
@@ -360,7 +456,6 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
             }
         }
         const toolCalls = Object.values(tcAccum);
-        // Add assistant message to history
         const assistantMsg = { role: 'assistant', content: assistantText || null };
         if (toolCalls.length) {
             assistantMsg.tool_calls = toolCalls.map((tc) => ({
@@ -370,13 +465,15 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
             }));
         }
         history.push(assistantMsg);
-        // No tool calls → done
         if (!toolCalls.length || finishReason === 'stop') {
             await onChunk({ type: 'done' });
             return;
         }
-        // Execute tools
         for (const tc of toolCalls) {
+            if (signal?.aborted) {
+                await onChunk({ type: 'error', error: 'Cancelled.' });
+                return;
+            }
             let args = {};
             try {
                 args = JSON.parse(tc.args || '{}');
@@ -396,20 +493,19 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
     await onChunk({ type: 'error', error: `Agent reached max steps (${agentCfg.maxSteps}).` });
 }
 // ─── Public API ───────────────────────────────────────────────────────────────
-export async function runAgent(provider, apiKeys, model, messages, onChunk, agentCfg, systemPrompt) {
+export async function runAgent(provider, apiKeys, model, messages, onChunk, agentCfg, systemPrompt, signal) {
     const config = { ...PROVIDERS[provider], apiKey: apiKeys[provider] };
     switch (provider) {
         case 'ollama':
-            return runOllamaAgent(config, model, messages, onChunk, agentCfg, systemPrompt);
+            return runOllamaAgent(config, model, messages, onChunk, agentCfg, systemPrompt, signal);
         case 'claude':
-            return runClaudeAgent(config, model, messages, onChunk, agentCfg, systemPrompt);
+            return runClaudeAgent(config, model, messages, onChunk, agentCfg, systemPrompt, signal);
         case 'openai':
-            return runOpenAIAgent(config.baseUrl, config.apiKey ?? '', model, messages, onChunk, agentCfg, 'OpenAI', systemPrompt);
+            return runOpenAIAgent(config.baseUrl, config.apiKey ?? '', model, messages, onChunk, agentCfg, 'OpenAI', systemPrompt, signal);
         case 'groq':
-            return runOpenAIAgent(config.baseUrl, config.apiKey ?? '', model, messages, onChunk, agentCfg, 'Groq', systemPrompt);
+            return runOpenAIAgent(config.baseUrl, config.apiKey ?? '', model, messages, onChunk, agentCfg, 'Groq', systemPrompt, signal);
     }
 }
-// Keep streamProvider as a simple single-turn wrapper (for /compact, /commit etc)
 export async function streamProvider(provider, apiKeys, model, messages, onChunk, systemPrompt) {
     return runAgent(provider, apiKeys, model, messages, onChunk, {
         maxSteps: 1,
@@ -422,15 +518,22 @@ export async function streamProvider(provider, apiKeys, model, messages, onChunk
 // ─── Token cost estimates ─────────────────────────────────────────────────────
 const COST_PER_1M = {
     'claude-sonnet-4-5': { in: 3, out: 15 },
+    'claude-sonnet-4-6': { in: 3, out: 15 },
     'claude-opus-4-5': { in: 15, out: 75 },
+    'claude-opus-4-6': { in: 15, out: 75 },
     'claude-haiku-4-5': { in: 0.25, out: 1.25 },
+    'claude-haiku-4-5-20251001': { in: 0.25, out: 1.25 },
     'gpt-4o': { in: 2.5, out: 10 },
     'gpt-4o-mini': { in: 0.15, out: 0.6 },
+    'gpt-4.1': { in: 2.0, out: 8.0 },
+    'gpt-4.1-mini': { in: 0.4, out: 1.6 },
     'llama-3.3-70b-versatile': { in: 0.59, out: 0.79 },
     'mixtral-8x7b-32768': { in: 0.24, out: 0.24 },
 };
 export function estimateCost(model, inputTokens, outputTokens) {
-    const rates = COST_PER_1M[model];
+    // Try exact match first, then prefix match (e.g. "claude-sonnet-4-5" matches "claude-sonnet-4-5-20251022")
+    const rates = COST_PER_1M[model]
+        ?? Object.entries(COST_PER_1M).find(([k]) => model.startsWith(k))?.[1];
     if (!rates)
         return 0;
     return (inputTokens / 1_000_000) * rates.in + (outputTokens / 1_000_000) * rates.out;
@@ -454,7 +557,7 @@ export async function listModels(provider, apiKeys) {
             if (!res.ok)
                 return [];
             const data = await res.json();
-            return data.data.map((m) => m.id).filter((id) => id.startsWith('gpt')).sort();
+            return data.data.map((m) => m.id).filter((id) => id.startsWith('gpt') || id.startsWith('o1') || id.startsWith('o3')).sort();
         }
         if (provider === 'groq') {
             const key = apiKeys.groq;
@@ -469,7 +572,7 @@ export async function listModels(provider, apiKeys) {
             return data.data.map((m) => m.id).sort();
         }
         if (provider === 'claude') {
-            return ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5-20251001'];
+            return ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5-20251001'];
         }
         return [];
     }

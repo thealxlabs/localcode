@@ -1,19 +1,28 @@
 // src/ui/App.tsx
 // Main TUI application — Claude Code inspired
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import { exec } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { PROVIDERS, SLASH_COMMANDS, } from '../core/types.js';
+import * as os from 'os';
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+const pkg = _require('../../package.json');
+import { PROVIDERS, SLASH_COMMANDS, THEMES, } from '../core/types.js';
 import { NyxHeader } from './NyxHeader.js';
 import { CommandPicker } from './CommandPicker.js';
-import { PermissionPrompt, needsPermission } from './PermissionPrompt.js';
+import { PermissionPrompt, needsApproval } from './PermissionPrompt.js';
+import { MarkdownText } from './MarkdownText.js';
 import { runAgent, streamProvider, listModels, estimateCost, BUILTIN_TOOLS } from '../providers/client.js';
 import { ToolExecutor } from '../tools/executor.js';
 import { McpManager } from '../mcp/manager.js';
-import { saveSession, createCheckpoint, restoreCheckpoint, estimateTokens, } from '../sessions/manager.js';
+import { saveSession, createCheckpoint, restoreCheckpoint, estimateTokens, loadNyxMemories, loadHooks, saveHistory, loadHistory, loadTemplates, saveTemplates, loadAliases, saveAliases, listSessions, loadSessionById, } from '../sessions/manager.js';
+import { loadPlugins } from '../plugins/loader.js';
+import { buildIndex, search as tfidfSearch } from '../search/tfidf.js';
+// ─── Spinner ──────────────────────────────────────────────────────────────────
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 export function App({ initialState }) {
     const { exit } = useApp();
     const { stdout } = useStdout();
@@ -29,9 +38,92 @@ export function App({ initialState }) {
     const [pendingPermission, setPendingPermission] = useState(null);
     const [history, setHistory] = useState([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
+    const [isMultiline, setIsMultiline] = useState(false);
+    const [multilineBuffer, setMultilineBuffer] = useState([]);
+    const [spinnerFrame, setSpinnerFrame] = useState(0);
+    const [streamingTokens, setStreamingTokens] = useState(0);
+    // Pending test output for "fix?" prompt
+    const [pendingTestFix, setPendingTestFix] = useState(null);
     const executorRef = useRef(new ToolExecutor(initialState.workingDir));
     const mcpRef = useRef(new McpManager());
     const streamingIdRef = useRef(null);
+    const abortRef = useRef(null);
+    const hooksRef = useRef(loadHooks());
+    const aliasesRef = useRef({});
+    const pluginsRef = useRef([]);
+    const watcherRef = useRef(null);
+    const watchFileRef = useRef(null);
+    const lastUserMsgRef = useRef('');
+    const searchIndexRef = useRef(null);
+    // Derive current theme
+    const theme = THEMES[session.theme ?? 'dark'];
+    // ── Mount effects ─────────────────────────────────────────────────────────────
+    // Load input history on mount
+    useEffect(() => {
+        const saved = loadHistory();
+        if (saved.length > 0) {
+            setHistory(saved);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    // Load aliases on mount
+    useEffect(() => {
+        aliasesRef.current = loadAliases();
+    }, []);
+    // Load plugins on mount
+    useEffect(() => {
+        loadPlugins().then((plugins) => {
+            pluginsRef.current = plugins;
+            if (plugins.length > 0) {
+                // Silently loaded — available via /plugins
+            }
+        }).catch(() => { });
+    }, []);
+    // Spinner animation while streaming
+    useEffect(() => {
+        if (!isStreaming)
+            return;
+        const id = setInterval(() => {
+            setSpinnerFrame((f) => (f + 1) % SPINNER_FRAMES.length);
+        }, 80);
+        return () => clearInterval(id);
+    }, [isStreaming]);
+    // Load .nyx.md memory hierarchy on mount (global + project) + auto-context
+    useEffect(() => {
+        const memories = loadNyxMemories(initialState.workingDir);
+        if (memories.length > 0) {
+            const combined = memories.map((m) => `[Memory: ${m.source}]\n${m.content}`).join('\n\n');
+            setSession((s) => ({
+                ...s,
+                pinnedContext: [combined, ...s.pinnedContext],
+            }));
+            sysMsg(`Loaded ${memories.length} memory file${memories.length > 1 ? 's' : ''}: ${memories.map((m) => path.basename(m.source)).join(', ')}`);
+        }
+        else {
+            // No .nyx.md found — try to inject git auto-context
+            const tryGitContext = async () => {
+                try {
+                    const gitLog = await new Promise((res) => {
+                        execFile('git', ['log', '--oneline', '-5'], { cwd: initialState.workingDir }, (err, out) => res(err ? '' : out));
+                    });
+                    const gitStatus = await new Promise((res) => {
+                        execFile('git', ['status', '--short'], { cwd: initialState.workingDir }, (err, out) => res(err ? '' : out));
+                    });
+                    if (gitLog.trim() || gitStatus.trim()) {
+                        const autoCtx = `[Auto-context]\ngit log:\n${gitLog.trim()}\n\ngit status:\n${gitStatus.trim()}`;
+                        setSession((s) => ({
+                            ...s,
+                            pinnedContext: [autoCtx, ...s.pinnedContext],
+                        }));
+                        sysMsg('Auto-context: injected git state (no .nyx.md found — run /init to create one)');
+                    }
+                }
+                catch { /* not a git repo — that's fine */ }
+            };
+            tryGitContext();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     // Compute filtered commands for picker
     const q = pickerQuery.toLowerCase();
     const filteredCommands = q
@@ -40,7 +132,7 @@ export function App({ initialState }) {
     // ── Helpers ──────────────────────────────────────────────────────────────────
     const addDisplay = useCallback((msg) => {
         const id = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-        setDisplayMessages((prev) => [...prev, { ...msg, id }]);
+        setDisplayMessages((prev) => [...prev, { ...msg, id, timestamp: Date.now() }]);
         return id;
     }, []);
     const updateDisplay = useCallback((id, patch) => {
@@ -61,11 +153,244 @@ export function App({ initialState }) {
             });
         });
     }, []);
+    // ── Hooks runner ──────────────────────────────────────────────────────────────
+    const runHooks = useCallback(async (event, toolCall, output) => {
+        const hooks = hooksRef.current[event] ?? [];
+        for (const hook of hooks) {
+            if (hook.matcher && toolCall && !toolCall.name.includes(hook.matcher) && !new RegExp(hook.matcher).test(toolCall.name))
+                continue;
+            const env = {
+                ...process.env,
+                LC_TOOL_NAME: toolCall?.name ?? '',
+                LC_TOOL_ARGS: toolCall ? JSON.stringify(toolCall.args) : '',
+                LC_TOOL_OUTPUT: output ?? '',
+                LC_TOOL_PATH: toolCall?.args?.path ?? toolCall?.args?.source ?? '',
+            };
+            try {
+                await new Promise((resolve) => {
+                    execFile('sh', ['-c', hook.command], { env, timeout: 10000 }, () => resolve());
+                });
+            }
+            catch { /* hooks never block the agent */ }
+        }
+    }, []);
     // ── Slash command handler ─────────────────────────────────────────────────────
+    const sendMessage = useCallback(async (text) => {
+        if (!text.trim() || isStreaming)
+            return;
+        // Add to history
+        const newHistory = [text, ...history.slice(0, 199)];
+        setHistory(newHistory);
+        saveHistory(newHistory);
+        setHistoryIndex(-1);
+        setInput('');
+        lastUserMsgRef.current = text;
+        // Handle @context syntax inline
+        let processedText = text;
+        const atMatches = text.match(/@[\w./\\-]+/g) ?? [];
+        for (const match of atMatches) {
+            const p = match.slice(1);
+            const result = await executorRef.current.execute({ name: 'read_file', args: { path: p } });
+            if (result.success) {
+                processedText = processedText.replace(match, `\n\`\`\`${p}\n${result.output}\n\`\`\``);
+            }
+            else {
+                sysMsg(`@context warning: could not read "${p}" — ${result.output}`, true);
+                processedText = processedText.replace(match, `[file not found: ${p}]`);
+            }
+        }
+        const userMsg = { role: 'user', content: processedText };
+        addDisplay({ role: 'user', content: text });
+        setSession((s) => {
+            const updated = { ...s, messages: [...s.messages, userMsg] };
+            return updated;
+        });
+        setIsStreaming(true);
+        setMood('thinking');
+        setStreamingTokens(0);
+        // Create streaming display message
+        const streamId = addDisplay({ role: 'assistant', content: '', streaming: true });
+        streamingIdRef.current = streamId;
+        let accumulated = '';
+        // Abort controller — cancelled by Escape key
+        const controller = new AbortController();
+        abortRef.current = controller;
+        // Snapshot session for this run
+        const currentSession = session;
+        const run = async () => {
+            const pinnedMsg = currentSession.pinnedContext.length
+                ? [{ role: 'user', content: `[Pinned context — always relevant]\n${currentSession.pinnedContext.join('\n')}` }]
+                : [];
+            const msgs = [...pinnedMsg, ...currentSession.messages, userMsg];
+            // Merge built-in tools with MCP tools
+            const mcpToolDefs = mcpRef.current.getToolDefinitions();
+            const allTools = [...BUILTIN_TOOLS, ...mcpToolDefs];
+            await runAgent(currentSession.provider, currentSession.apiKeys, currentSession.model, msgs, async (chunk) => {
+                if (controller.signal.aborted)
+                    return;
+                switch (chunk.type) {
+                    case 'agent_step':
+                        if ((chunk.step ?? 0) > 0) {
+                            // Show step indicator after first iteration
+                            addDisplay({
+                                role: 'system',
+                                content: `${SPINNER_FRAMES[spinnerFrame]}  Step ${(chunk.step ?? 0) + 1}/${chunk.maxSteps}`,
+                            });
+                        }
+                        break;
+                    case 'text':
+                        accumulated += chunk.text ?? '';
+                        updateDisplay(streamId, { content: accumulated, streaming: true });
+                        setStreamingTokens((prev) => prev + Math.ceil((chunk.text ?? '').length / 4));
+                        break;
+                    case 'done':
+                        updateDisplay(streamId, { streaming: false });
+                        setStreamingTokens(0);
+                        if (accumulated.trim()) {
+                            const inputTokens = Math.ceil(msgs.reduce((a, m) => a + m.content.length, 0) / 4);
+                            const outputTokens = Math.ceil(accumulated.length / 4);
+                            const cost = estimateCost(currentSession.model, inputTokens, outputTokens);
+                            setSession((s) => {
+                                const newMessages = [
+                                    ...s.messages,
+                                    { role: 'assistant', content: accumulated },
+                                ];
+                                const shouldCheckpoint = s.autoCheckpoint && newMessages.length % 20 === 0;
+                                const checkpoints = shouldCheckpoint
+                                    ? [...s.checkpoints, {
+                                            id: `cp_auto_${Date.now()}`,
+                                            label: `auto-${newMessages.length}msgs`,
+                                            timestamp: Date.now(),
+                                            messages: newMessages,
+                                            files: {},
+                                        }]
+                                    : s.checkpoints;
+                                if (shouldCheckpoint)
+                                    setTimeout(() => sysMsg(`Auto-checkpoint saved.`), 100);
+                                // Multi-file diff summary
+                                const sessionFiles = executorRef.current.getSessionFiles();
+                                const modifiedPaths = Object.keys(sessionFiles);
+                                if (modifiedPaths.length > 0) {
+                                    const summaryParts = modifiedPaths.slice(0, 5).map((fp) => {
+                                        const diff = executorRef.current.unifiedDiff(fp);
+                                        if (!diff)
+                                            return `  ${path.basename(fp)}`;
+                                        const adds = (diff.match(/^\+[^+]/gm) ?? []).length;
+                                        const dels = (diff.match(/^-[^-]/gm) ?? []).length;
+                                        return `  ${path.basename(fp)} +${adds} -${dels}`;
+                                    });
+                                    if (summaryParts.length > 0) {
+                                        setTimeout(() => sysMsg(`· Files changed: ${summaryParts.join('  |')}`), 50);
+                                    }
+                                }
+                                const next = {
+                                    ...s,
+                                    messages: newMessages,
+                                    lastAssistantMessage: accumulated,
+                                    sessionCost: s.sessionCost + cost,
+                                    checkpoints,
+                                };
+                                setTimeout(() => { try {
+                                    saveSession(next);
+                                }
+                                catch { /* non-critical */ } }, 0);
+                                return next;
+                            });
+                        }
+                        break;
+                    case 'error':
+                        updateDisplay(streamId, { content: chunk.error ?? 'Unknown error', streaming: false, isError: true });
+                        setMood('error');
+                        setStreamingTokens(0);
+                        break;
+                }
+            }, {
+                maxSteps: currentSession.maxSteps,
+                tools: allTools,
+                onToolCall: async (toolCall) => {
+                    if (needsApproval(toolCall, currentSession.approvalMode)) {
+                        setMood('waiting');
+                        const perm = await requestPermission(toolCall);
+                        if (perm.allowAll)
+                            setSession((s) => ({ ...s, approvalMode: 'full-auto' }));
+                        setMood('thinking');
+                        return perm;
+                    }
+                    return { allowed: true, allowAll: false };
+                },
+                onToolResult: (toolCall, output, diff) => {
+                    // Truncate tool output to 200 chars for display
+                    const truncated = output.length > 200
+                        ? output.slice(0, 200) + `  [truncated +${output.length - 200} chars]`
+                        : output;
+                    addDisplay({
+                        role: 'tool',
+                        content: `${toolCall.name} → ${truncated}`,
+                        toolName: toolCall.name,
+                        streaming: false,
+                    });
+                    if (diff && typeof diff === 'object' && 'additions' in diff) {
+                        const d = diff;
+                        addDisplay({ role: 'system', content: `  ${d.path}  +${d.additions} -${d.deletions}` });
+                    }
+                },
+                executeTool: async (toolCall) => {
+                    await runHooks('PreToolUse', toolCall);
+                    let result;
+                    if (mcpRef.current.isMcpTool(toolCall.name)) {
+                        const r = await mcpRef.current.callTool(toolCall.name, toolCall.args);
+                        result = { success: r.success, output: r.output };
+                    }
+                    else {
+                        result = await executorRef.current.execute(toolCall);
+                    }
+                    await runHooks('PostToolUse', toolCall, result.output);
+                    return result;
+                },
+            }, currentSession.systemPrompt, controller.signal);
+        };
+        try {
+            await run();
+        }
+        catch (err) {
+            updateDisplay(streamId, {
+                content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+                streaming: false,
+                isError: true,
+            });
+            setMood('error');
+        }
+        finally {
+            setIsStreaming(false);
+            setMood((m) => (m === 'thinking' || m === 'waiting' ? 'idle' : m));
+            runHooks('Notification');
+        }
+    }, [isStreaming, session, history, addDisplay, updateDisplay, requestPermission, runHooks, spinnerFrame, sysMsg]);
     const handleSlashCommand = useCallback(async (raw) => {
         const parts = raw.trim().split(/\s+/);
         const cmd = parts[0].toLowerCase();
         const args = parts.slice(1).join(' ');
+        // Check aliases first
+        const aliasedCmd = aliasesRef.current[cmd];
+        if (aliasedCmd) {
+            await handleSlashCommand(args ? `${aliasedCmd} ${args}` : aliasedCmd);
+            return;
+        }
+        // Check plugins
+        const plugin = pluginsRef.current.find((p) => p.trigger === cmd);
+        if (plugin) {
+            try {
+                await plugin.execute(args, {
+                    workingDir: session.workingDir,
+                    sysMsg,
+                    addDisplay: (msg) => addDisplay(msg),
+                });
+            }
+            catch (err) {
+                sysMsg(`Plugin ${plugin.name} error: ${err instanceof Error ? err.message : String(err)}`, true);
+            }
+            return;
+        }
         switch (cmd) {
             case '/help': {
                 setShowPicker(true);
@@ -79,6 +404,145 @@ export function App({ initialState }) {
                 setSession((s) => ({ ...s, messages: [] }));
                 setMood('idle');
                 sysMsg('Conversation cleared.');
+                return;
+            }
+            case '/theme': {
+                const validThemes = ['dark', 'nord', 'monokai', 'light'];
+                if (!args) {
+                    const list = validThemes.map((t) => `  ${session.theme === t ? '▶ ' : '  '}${t}`).join('\n');
+                    sysMsg(`Themes:\n${list}\n\nUsage: /theme <name>`);
+                    return;
+                }
+                if (!validThemes.includes(args)) {
+                    sysMsg(`Unknown theme: ${args}. Options: dark, nord, monokai, light`, true);
+                    return;
+                }
+                setSession((s) => ({ ...s, theme: args }));
+                sysMsg(`Theme set to: ${args}`);
+                return;
+            }
+            case '/template': {
+                const tParts = args.split(/\s+/);
+                const tSub = tParts[0]?.toLowerCase() ?? '';
+                const tRest = tParts.slice(1).join(' ');
+                if (!tSub || tSub === 'list') {
+                    const templates = loadTemplates();
+                    if (!templates.length) {
+                        sysMsg('No templates saved. Usage: /template add <name> <prompt>');
+                        return;
+                    }
+                    const list = templates.map((t, i) => `  ${i + 1}. ${t.name}  —  ${t.description || t.prompt.slice(0, 60)}`).join('\n');
+                    sysMsg(`Templates (${templates.length}):\n${list}\n\nUsage: /template use <name>`);
+                    return;
+                }
+                if (tSub === 'add') {
+                    const nameParts = tRest.split(/\s+/);
+                    const tName = nameParts[0];
+                    const tPrompt = nameParts.slice(1).join(' ');
+                    if (!tName || !tPrompt) {
+                        sysMsg('Usage: /template add <name> <prompt text>', true);
+                        return;
+                    }
+                    const templates = loadTemplates();
+                    const existing = templates.findIndex((t) => t.name === tName);
+                    const newTemplate = { name: tName, prompt: tPrompt, description: tPrompt.slice(0, 60) };
+                    if (existing >= 0) {
+                        templates[existing] = newTemplate;
+                    }
+                    else {
+                        templates.push(newTemplate);
+                    }
+                    saveTemplates(templates);
+                    sysMsg(`Template saved: "${tName}"`);
+                    return;
+                }
+                if (tSub === 'use') {
+                    const tName = tRest.trim();
+                    if (!tName) {
+                        sysMsg('Usage: /template use <name>', true);
+                        return;
+                    }
+                    const templates = loadTemplates();
+                    const found = templates.find((t) => t.name === tName);
+                    if (!found) {
+                        sysMsg(`Template not found: ${tName}`, true);
+                        return;
+                    }
+                    setInput(found.prompt);
+                    sysMsg(`Template loaded into input: "${tName}"`);
+                    return;
+                }
+                if (tSub === 'delete') {
+                    const tName = tRest.trim();
+                    if (!tName) {
+                        sysMsg('Usage: /template delete <name>', true);
+                        return;
+                    }
+                    const templates = loadTemplates();
+                    const filtered = templates.filter((t) => t.name !== tName);
+                    if (filtered.length === templates.length) {
+                        sysMsg(`Template not found: ${tName}`, true);
+                        return;
+                    }
+                    saveTemplates(filtered);
+                    sysMsg(`Template deleted: "${tName}"`);
+                    return;
+                }
+                sysMsg('Usage: /template [list|add|use|delete] ...');
+                return;
+            }
+            case '/alias': {
+                const aParts = args.split(/\s+/);
+                const aSub = aParts[0] ?? '';
+                if (!aSub) {
+                    const aliases = aliasesRef.current;
+                    const keys = Object.keys(aliases);
+                    if (!keys.length) {
+                        sysMsg('No aliases. Usage: /alias <name> <command>');
+                        return;
+                    }
+                    const list = keys.map((k) => `  ${k}  →  ${aliases[k]}`).join('\n');
+                    sysMsg(`Aliases (${keys.length}):\n${list}`);
+                    return;
+                }
+                if (aSub === 'delete') {
+                    const aName = aParts[1];
+                    if (!aName) {
+                        sysMsg('Usage: /alias delete <name>', true);
+                        return;
+                    }
+                    const aliases = { ...aliasesRef.current };
+                    if (!(aName in aliases)) {
+                        sysMsg(`Alias not found: ${aName}`, true);
+                        return;
+                    }
+                    delete aliases[aName];
+                    aliasesRef.current = aliases;
+                    saveAliases(aliases);
+                    sysMsg(`Alias deleted: ${aName}`);
+                    return;
+                }
+                // /alias <name> <command>
+                const aName = aSub;
+                const aCmd = aParts.slice(1).join(' ');
+                if (!aCmd) {
+                    sysMsg('Usage: /alias <name> <command>', true);
+                    return;
+                }
+                const aliases = { ...aliasesRef.current, [aName]: aCmd };
+                aliasesRef.current = aliases;
+                saveAliases(aliases);
+                sysMsg(`Alias set: ${aName}  →  ${aCmd}`);
+                return;
+            }
+            case '/plugins': {
+                const plugins = pluginsRef.current;
+                if (!plugins.length) {
+                    sysMsg(`No plugins loaded.\n\nPlace .js plugin files in ~/.localcode/plugins/\nEach file should export default: { name, trigger, description, execute }`);
+                    return;
+                }
+                const list = plugins.map((p) => `  ${p.trigger.padEnd(16)} ${p.description}`).join('\n');
+                sysMsg(`Loaded plugins (${plugins.length}):\n${list}`);
                 return;
             }
             case '/provider': {
@@ -159,12 +623,76 @@ export function App({ initialState }) {
                 sysMsg(`Restored checkpoint: ${args}`);
                 return;
             }
+            case '/history': {
+                const sessions = listSessions();
+                if (!sessions.length) {
+                    sysMsg('No session history found.');
+                    return;
+                }
+                if (!args) {
+                    const list = sessions.slice(0, 20).map((s, i) => {
+                        const date = new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                        const shortCwd = s.cwd.replace(os.homedir(), '~').slice(-40);
+                        return `  ${String(i + 1).padStart(2)}. ${date}  ${shortCwd}  (${s.messageCount} msgs)  ${s.provider}/${s.model}`;
+                    }).join('\n');
+                    sysMsg(`Session history (${Math.min(20, sessions.length)}):\n${list}\n\nUsage: /history <n> to restore`);
+                    return;
+                }
+                const n = parseInt(args, 10);
+                if (isNaN(n) || n < 1 || n > sessions.length) {
+                    sysMsg(`Invalid session number: ${args}`, true);
+                    return;
+                }
+                const target = sessions[n - 1];
+                const loaded = loadSessionById(target.id);
+                if (!loaded) {
+                    sysMsg(`Could not load session: ${target.id}`, true);
+                    return;
+                }
+                setSession(loaded);
+                setDisplayMessages([]);
+                sysMsg(`Loaded session from ${new Date(target.timestamp).toLocaleString()} — ${loaded.messages.length} messages`);
+                return;
+            }
+            case '/review': {
+                setMood('thinking');
+                sysMsg('Running code review…');
+                try {
+                    // Prefer staged diff, fall back to working tree diff
+                    const staged = await new Promise((res, rej) => {
+                        execFile('git', ['diff', '--staged'], { cwd: session.workingDir }, (err, out) => err ? rej(err) : res(out));
+                    });
+                    const diff = staged.trim() || await new Promise((res, rej) => {
+                        execFile('git', ['diff', 'HEAD'], { cwd: session.workingDir }, (err, out) => err ? rej(err) : res(out));
+                    });
+                    if (!diff.trim()) {
+                        sysMsg('No changes to review. Stage files or make edits first.', true);
+                        setMood('idle');
+                        return;
+                    }
+                    const prompt = `Do a thorough code review of this diff. Group findings by severity:\n🔴 Critical — bugs, security vulnerabilities, data loss risk\n🟡 Warning  — performance, missing error handling, anti-patterns\n🔵 Suggestion — style, readability, improvements\n\nBe specific with exact line references. If there are no issues in a category, skip it.\n\n\`\`\`diff\n${diff.slice(0, 8000)}\n\`\`\``;
+                    const reviewId = addDisplay({ role: 'assistant', content: '', streaming: true });
+                    let review = '';
+                    await streamProvider(session.provider, session.apiKeys, session.model, [{ role: 'user', content: prompt }], (chunk) => { if (chunk.text) {
+                        review += chunk.text;
+                        updateDisplay(reviewId, { content: review, streaming: true });
+                    } }, session.systemPrompt);
+                    updateDisplay(reviewId, { content: review, streaming: false });
+                    setSession((s) => ({ ...s, lastAssistantMessage: review }));
+                }
+                catch (err) {
+                    sysMsg(`Review failed: ${err instanceof Error ? err.message : String(err)}`, true);
+                    setMood('error');
+                }
+                setMood('idle');
+                return;
+            }
             case '/commit': {
                 setMood('thinking');
                 sysMsg('Generating commit message…');
                 try {
                     const stdout = await new Promise((res, rej) => {
-                        exec('git diff --staged', { cwd: session.workingDir }, (err, out) => {
+                        execFile('git', ['diff', '--staged'], { cwd: session.workingDir }, (err, out) => {
                             if (err)
                                 rej(err);
                             else
@@ -183,7 +711,7 @@ export function App({ initialState }) {
                         commitMsg += chunk.text; });
                     commitMsg = commitMsg.trim().split('\n')[0];
                     const fullMsg = `${commitMsg}\n\nCo-authored-by: Nyx <nyx@thealxlabs.ca>`;
-                    exec(`git commit -m "${fullMsg.replace(/"/g, '\\"')}"`, { cwd: session.workingDir }, (err, out) => {
+                    execFile('git', ['commit', '-m', fullMsg], { cwd: session.workingDir }, (err) => {
                         if (err) {
                             sysMsg(`Commit failed: ${err.message}`, true);
                             setMood('error');
@@ -200,6 +728,42 @@ export function App({ initialState }) {
                 }
                 return;
             }
+            case '/git': {
+                const gParts = args.split(/\s+/);
+                const gSub = gParts[0]?.toLowerCase() ?? '';
+                const runGit = async (gitArgs) => {
+                    return new Promise((res) => {
+                        execFile('git', gitArgs, { cwd: session.workingDir }, (err, out, errOut) => {
+                            res(err ? (errOut || err.message) : out);
+                        });
+                    });
+                };
+                if (!gSub || gSub === 'status') {
+                    const status = await runGit(['status', '--short']);
+                    const log = await runGit(['log', '--oneline', '-5']);
+                    sysMsg(`git status:\n${status.trim() || '(clean)'}\n\ngit log (last 5):\n${log.trim()}`);
+                    return;
+                }
+                if (gSub === 'log') {
+                    const log = await runGit(['log', '--oneline', '-20']);
+                    sysMsg(`git log:\n${log.trim()}`);
+                    return;
+                }
+                if (gSub === 'stash') {
+                    const out = await runGit(['stash']);
+                    sysMsg(`git stash:\n${out.trim()}`);
+                    return;
+                }
+                if (gSub === 'branch') {
+                    const branches = await runGit(['branch', '-a']);
+                    sysMsg(`git branch:\n${branches.trim()}`);
+                    return;
+                }
+                // Pass-through any git command
+                const out = await runGit(args.split(/\s+/).filter(Boolean));
+                sysMsg(`git ${args}:\n${out.trim()}`);
+                return;
+            }
             case '/diff': {
                 const files = executorRef.current.getSessionFiles();
                 const paths = Object.keys(files);
@@ -207,7 +771,25 @@ export function App({ initialState }) {
                     sysMsg('No files modified in this session.');
                     return;
                 }
-                sysMsg(`Files modified this session:\n${paths.map((p) => `  ± ${p}`).join('\n')}`);
+                if (args === '--list' || args === '-l') {
+                    sysMsg(`Files modified this session:\n${paths.map((p) => `  ± ${p}`).join('\n')}`);
+                    return;
+                }
+                // Show unified diffs for all (or specified) modified files
+                const target = args ? paths.filter((p) => p.includes(args)) : paths;
+                if (!target.length) {
+                    sysMsg(`No modified files matching: ${args}`);
+                    return;
+                }
+                for (const filePath of target) {
+                    const diff = executorRef.current.unifiedDiff(filePath);
+                    if (diff) {
+                        sysMsg(diff.slice(0, 3000));
+                    }
+                    else {
+                        sysMsg(`  ${filePath}  (unchanged)`);
+                    }
+                }
                 return;
             }
             case '/context': {
@@ -235,8 +817,45 @@ export function App({ initialState }) {
                 return;
             }
             case '/allowall': {
-                setSession((s) => ({ ...s, allowAllTools: !s.allowAllTools }));
-                sysMsg(`Tool permissions: ${!session.allowAllTools ? 'all allowed (no prompts)' : 'per-call prompts restored'}`);
+                // Cycle through modes: suggest → auto-edit → full-auto → suggest
+                setSession((s) => {
+                    const current = s.approvalMode;
+                    const next = current === 'suggest' ? 'auto-edit' :
+                        current === 'auto-edit' ? 'full-auto' : 'suggest';
+                    sysMsg(`Approval mode: ${next}`);
+                    return { ...s, approvalMode: next };
+                });
+                return;
+            }
+            case '/mode': {
+                if (!args) {
+                    sysMsg(`Current mode: ${session.approvalMode}\n\n` +
+                        `  suggest    — prompt before every write, delete, shell, or git op\n` +
+                        `  auto-edit  — file edits auto-approved; only shell needs approval\n` +
+                        `  full-auto  — everything runs without prompting\n\n` +
+                        `Usage: /mode <suggest|auto-edit|full-auto>`);
+                    return;
+                }
+                if (!['suggest', 'auto-edit', 'full-auto'].includes(args)) {
+                    sysMsg(`Unknown mode: ${args}. Options: suggest, auto-edit, full-auto`, true);
+                    return;
+                }
+                setSession((s) => ({ ...s, approvalMode: args }));
+                sysMsg(`Approval mode set to: ${args}`);
+                return;
+            }
+            case '/steps': {
+                if (!args) {
+                    sysMsg(`Max agent steps: ${session.maxSteps}\nUsage: /steps <number>  (default: 20)`);
+                    return;
+                }
+                const n = parseInt(args, 10);
+                if (isNaN(n) || n < 1 || n > 200) {
+                    sysMsg('Steps must be a number between 1 and 200.', true);
+                    return;
+                }
+                setSession((s) => ({ ...s, maxSteps: n }));
+                sysMsg(`Max agent steps set to ${n}.`);
                 return;
             }
             case '/compact': {
@@ -269,7 +888,8 @@ export function App({ initialState }) {
                     `~Tokens   ${tokens.toLocaleString()}\n` +
                     `Checkpts  ${cps}\n` +
                     `CWD       ${session.workingDir}\n` +
-                    `AllowAll  ${session.allowAllTools ? 'yes' : 'no'}`);
+                    `Mode      ${session.approvalMode}\n` +
+                    `Theme     ${session.theme ?? 'dark'}`);
                 return;
             }
             case '/sys': {
@@ -364,13 +984,28 @@ export function App({ initialState }) {
                     return;
                 }
                 try {
-                    // Use pbcopy on Mac, xclip/xsel on Linux
-                    const clipCmd = process.platform === 'darwin'
-                        ? `echo ${JSON.stringify(session.lastAssistantMessage)} | pbcopy`
-                        : `echo ${JSON.stringify(session.lastAssistantMessage)} | xclip -selection clipboard 2>/dev/null || echo ${JSON.stringify(session.lastAssistantMessage)} | xsel --clipboard --input`;
-                    await new Promise((res, rej) => {
-                        exec(clipCmd, (err) => err ? rej(err) : res());
-                    });
+                    // Pass content via stdin to avoid any shell expansion of the message content
+                    const content = session.lastAssistantMessage;
+                    if (process.platform === 'darwin') {
+                        execFileSync('pbcopy', [], { input: content, encoding: 'utf8' });
+                    }
+                    else if (process.platform === 'win32') {
+                        execFileSync('clip', [], { input: content, encoding: 'utf8' });
+                    }
+                    else {
+                        // Linux — try xclip, then xsel, then wl-clipboard (Wayland)
+                        try {
+                            execFileSync('xclip', ['-selection', 'clipboard'], { input: content, encoding: 'utf8' });
+                        }
+                        catch {
+                            try {
+                                execFileSync('xsel', ['--clipboard', '--input'], { input: content, encoding: 'utf8' });
+                            }
+                            catch {
+                                execFileSync('wl-copy', [], { input: content, encoding: 'utf8' });
+                            }
+                        }
+                    }
                     sysMsg(`Copied ${session.lastAssistantMessage.length} chars to clipboard.`);
                 }
                 catch {
@@ -398,6 +1033,67 @@ export function App({ initialState }) {
                 ];
                 fs.writeFileSync(outPath, lines.join('\n'), 'utf8');
                 sysMsg(`Exported to ${outPath}`);
+                return;
+            }
+            case '/share': {
+                const timestamp = Date.now();
+                const outPath = path.join(session.workingDir, `localcode-share-${timestamp}.html`);
+                const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                const msgHtml = session.messages.map((m) => {
+                    const roleLabel = m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Nyx' : 'System';
+                    const roleClass = m.role;
+                    const content = escapeHtml(m.content)
+                        .replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => `<pre><code class="lang-${lang}">${code}</code></pre>`)
+                        .replace(/`([^`]+)`/g, '<code>$1</code>')
+                        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                        .replace(/\n/g, '<br>');
+                    return `<div class="message ${roleClass}"><span class="role">${roleLabel}</span><div class="content">${content}</div></div>`;
+                }).join('\n');
+                const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalCode Session — ${new Date(timestamp).toLocaleString()}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 14px; line-height: 1.6; padding: 24px; }
+  h1 { color: #f5c518; margin-bottom: 8px; font-size: 20px; }
+  .meta { color: #888; font-size: 12px; margin-bottom: 24px; }
+  .message { margin-bottom: 20px; padding: 12px 16px; border-radius: 8px; max-width: 900px; }
+  .message.user { background: #16213e; border-left: 3px solid #f5c518; }
+  .message.assistant { background: #0f3460; border-left: 3px solid #e94560; }
+  .message.system { background: #0a0a1a; border-left: 3px solid #444; color: #888; }
+  .role { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #888; display: block; margin-bottom: 6px; }
+  .message.user .role { color: #f5c518; }
+  .message.assistant .role { color: #e94560; }
+  .content { white-space: pre-wrap; word-break: break-word; }
+  pre { background: #0d1117; border: 1px solid #333; border-radius: 6px; padding: 12px; margin: 8px 0; overflow-x: auto; }
+  code { background: #1e1e2e; padding: 2px 6px; border-radius: 3px; color: #a6da95; font-size: 13px; }
+  pre code { background: none; padding: 0; color: #cdd6f4; }
+  strong { color: #f5c518; }
+  footer { margin-top: 32px; color: #444; font-size: 11px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>LocalCode Session Export</h1>
+<div class="meta">
+  Date: ${new Date(timestamp).toLocaleString()} &nbsp;·&nbsp;
+  Provider: ${PROVIDERS[session.provider].displayName} &nbsp;·&nbsp;
+  Model: ${escapeHtml(session.model)} &nbsp;·&nbsp;
+  Messages: ${session.messages.length}
+</div>
+${msgHtml}
+<footer>Generated by LocalCode &nbsp;·&nbsp; github.com/thealxlabs/localcode</footer>
+</body>
+</html>`;
+                try {
+                    fs.writeFileSync(outPath, html, 'utf8');
+                    sysMsg(`HTML export saved to:\n  ${outPath}`);
+                }
+                catch (err) {
+                    sysMsg(`Export failed: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
                 return;
             }
             case '/undo': {
@@ -440,8 +1136,21 @@ export function App({ initialState }) {
                 setMood('thinking');
                 try {
                     const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(args)}`;
-                    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-                    const text = await res.text();
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 8000);
+                    let text;
+                    try {
+                        const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: controller.signal });
+                        if (!res.ok) {
+                            sysMsg(`Web search failed: server returned ${res.status}`, true);
+                            setMood('idle');
+                            return;
+                        }
+                        text = await res.text();
+                    }
+                    finally {
+                        clearTimeout(timeoutId);
+                    }
                     // Extract visible text snippets from results
                     const snippets = [...text.matchAll(/class="result__snippet"[^>]*>([^<]{20,300})</g)]
                         .slice(0, 5)
@@ -468,7 +1177,7 @@ export function App({ initialState }) {
                     return;
                 }
                 const editor = process.env.EDITOR || (process.platform === 'darwin' ? 'open' : 'xdg-open');
-                exec(`${editor} ${JSON.stringify(args)}`, { cwd: session.workingDir }, (err) => {
+                execFile(editor, [args], { cwd: session.workingDir }, (err) => {
                     if (err)
                         sysMsg(`Could not open: ${err.message}`, true);
                     else
@@ -498,6 +1207,388 @@ export function App({ initialState }) {
                 }
                 else {
                     sysMsg(`Provider: ${provider.displayName}\nModel: ${session.model}\n~Tokens this session: ${tokens.toLocaleString()}\nEstimated cost: $${cost.toFixed(6)} USD`);
+                }
+                return;
+            }
+            case '/explain': {
+                setMood('thinking');
+                let prompt;
+                if (args) {
+                    // Load file at path
+                    const filePath = path.isAbsolute(args) ? args : path.join(session.workingDir, args);
+                    try {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        prompt = `Explain this code clearly: what it does, how it works, key patterns and design decisions.\n\nFile: ${args}\n\`\`\`\n${content.slice(0, 8000)}\n\`\`\``;
+                    }
+                    catch {
+                        sysMsg(`Could not read file: ${args}`, true);
+                        setMood('idle');
+                        return;
+                    }
+                }
+                else {
+                    prompt = 'Explain the last code snippet in this conversation: what it does, how it works, and any key patterns or design decisions.';
+                }
+                const explainId = addDisplay({ role: 'assistant', content: '', streaming: true });
+                let explanation = '';
+                await streamProvider(session.provider, session.apiKeys, session.model, [...session.messages, { role: 'user', content: prompt }], (chunk) => { if (chunk.text) {
+                    explanation += chunk.text;
+                    updateDisplay(explainId, { content: explanation, streaming: true });
+                } }, session.systemPrompt);
+                updateDisplay(explainId, { content: explanation, streaming: false });
+                setSession((s) => ({ ...s, lastAssistantMessage: explanation }));
+                setMood('idle');
+                return;
+            }
+            case '/test': {
+                setMood('thinking');
+                sysMsg('Detecting test runner…');
+                const cwd = session.workingDir;
+                let testCmd = null;
+                // Detect test runner
+                try {
+                    const pkgPath = path.join(cwd, 'package.json');
+                    if (fs.existsSync(pkgPath)) {
+                        const pkgContent = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                        const deps = { ...(pkgContent.dependencies ?? {}), ...(pkgContent.devDependencies ?? {}) };
+                        if (deps['vitest']) {
+                            testCmd = 'npx vitest run';
+                        }
+                        else if (deps['jest'] || pkgContent.scripts?.test?.includes('jest')) {
+                            testCmd = 'npm test';
+                        }
+                    }
+                }
+                catch { /* ok */ }
+                if (!testCmd && fs.existsSync(path.join(cwd, 'Cargo.toml'))) {
+                    testCmd = 'cargo test';
+                }
+                if (!testCmd && fs.existsSync(path.join(cwd, 'go.mod'))) {
+                    testCmd = 'go test ./...';
+                }
+                if (!testCmd) {
+                    const pyFiles = ['pytest.ini', 'pyproject.toml', 'setup.cfg'];
+                    for (const f of pyFiles) {
+                        const fp = path.join(cwd, f);
+                        if (fs.existsSync(fp)) {
+                            const content = fs.readFileSync(fp, 'utf8');
+                            if (f === 'pyproject.toml' ? content.includes('[tool.pytest') : true) {
+                                testCmd = 'pytest';
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!testCmd) {
+                    sysMsg('Could not detect a test runner. Expected: package.json (jest/vitest), pytest.ini, Cargo.toml, or go.mod', true);
+                    setMood('idle');
+                    return;
+                }
+                sysMsg(`Running: ${testCmd}`);
+                const testOutputId = addDisplay({ role: 'system', content: `$ ${testCmd}\n`, streaming: true });
+                let testOutput = `$ ${testCmd}\n`;
+                let exitCode = 0;
+                await new Promise((resolve) => {
+                    const child = execFile('sh', ['-c', testCmd], { cwd, env: process.env }, (err, out, errOut) => {
+                        if (err)
+                            exitCode = err.code ?? 1;
+                        testOutput += out + errOut;
+                        resolve();
+                    });
+                    if (child.stdout) {
+                        child.stdout.on('data', (data) => {
+                            testOutput += data;
+                            updateDisplay(testOutputId, { content: testOutput, streaming: true });
+                        });
+                    }
+                    if (child.stderr) {
+                        child.stderr.on('data', (data) => {
+                            testOutput += data;
+                            updateDisplay(testOutputId, { content: testOutput, streaming: true });
+                        });
+                    }
+                });
+                updateDisplay(testOutputId, { content: testOutput, streaming: false });
+                if (exitCode !== 0) {
+                    sysMsg(`Tests failed (exit code ${exitCode}). Ask Nyx to fix? [y/N]`);
+                    setPendingTestFix(testOutput);
+                }
+                else {
+                    sysMsg('All tests passed!');
+                    setMood('happy');
+                }
+                setMood(exitCode !== 0 ? 'error' : 'idle');
+                return;
+            }
+            case '/watch': {
+                const wSub = args.trim();
+                if (!wSub) {
+                    if (watchFileRef.current) {
+                        sysMsg(`Watching: ${watchFileRef.current}\n\nUse /watch stop to stop.`);
+                    }
+                    else {
+                        sysMsg('No file being watched. Usage: /watch <file>');
+                    }
+                    return;
+                }
+                if (wSub === 'stop') {
+                    if (watcherRef.current) {
+                        watcherRef.current.close();
+                        watcherRef.current = null;
+                        const prev = watchFileRef.current;
+                        watchFileRef.current = null;
+                        sysMsg(`Stopped watching: ${prev}`);
+                    }
+                    else {
+                        sysMsg('No active watcher.');
+                    }
+                    return;
+                }
+                // Start watching
+                const watchPath = path.isAbsolute(wSub) ? wSub : path.join(session.workingDir, wSub);
+                if (!fs.existsSync(watchPath)) {
+                    sysMsg(`File not found: ${watchPath}`, true);
+                    return;
+                }
+                // Stop previous watcher
+                if (watcherRef.current) {
+                    watcherRef.current.close();
+                    watcherRef.current = null;
+                }
+                watchFileRef.current = watchPath;
+                sysMsg(`Watching ${watchPath}…`);
+                let debounceTimer = null;
+                watcherRef.current = fs.watch(watchPath, () => {
+                    if (debounceTimer)
+                        clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(() => {
+                        const lastMsg = lastUserMsgRef.current;
+                        if (lastMsg && !isStreaming) {
+                            sysMsg(`File changed: ${path.basename(watchPath)} — re-running last message…`);
+                            sendMessage(lastMsg);
+                        }
+                    }, 500);
+                });
+                return;
+            }
+            case '/image': {
+                if (!args) {
+                    sysMsg('Usage: /image <file-path>');
+                    return;
+                }
+                const imgPath = path.isAbsolute(args) ? args : path.join(session.workingDir, args);
+                if (!fs.existsSync(imgPath)) {
+                    sysMsg(`File not found: ${imgPath}`, true);
+                    return;
+                }
+                try {
+                    const imgBuf = fs.readFileSync(imgPath);
+                    const base64 = imgBuf.toString('base64');
+                    const ext = path.extname(imgPath).toLowerCase().slice(1);
+                    const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+                    const mimeType = mimeMap[ext] ?? 'image/png';
+                    const sizeKb = Math.round(imgBuf.length / 1024);
+                    const imgMsg = {
+                        role: 'user',
+                        content: `[Image: ${path.basename(imgPath)}]`,
+                        images: [{ base64, mimeType }],
+                    };
+                    setSession((s) => ({ ...s, messages: [...s.messages, imgMsg] }));
+                    addDisplay({ role: 'user', content: `[Image: ${path.basename(imgPath)}]` });
+                    sysMsg(`Image loaded: ${path.basename(imgPath)} (${sizeKb}kb). You can now ask about it.`);
+                }
+                catch (err) {
+                    sysMsg(`Could not read image: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
+                return;
+            }
+            case '/index': {
+                sysMsg(`Building TF-IDF index for ${session.workingDir}…`);
+                setMood('thinking');
+                try {
+                    const index = buildIndex(session.workingDir, 500);
+                    searchIndexRef.current = index;
+                    sysMsg(`Indexed ${index.files.length} files. Use /search <query> for semantic search.`);
+                }
+                catch (err) {
+                    sysMsg(`Indexing failed: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
+                setMood('idle');
+                return;
+            }
+            case '/search': {
+                if (!args) {
+                    sysMsg('Usage: /search <pattern>  — search file contents in working dir');
+                    return;
+                }
+                // Use TF-IDF if indexed
+                if (searchIndexRef.current) {
+                    sysMsg(`Searching (TF-IDF) for "${args}"…`);
+                    const results = tfidfSearch(args, searchIndexRef.current, 10);
+                    if (!results.length) {
+                        sysMsg(`No results for: ${args}`);
+                        return;
+                    }
+                    const list = results.map((r, i) => `  ${i + 1}. ${r.filePath.replace(session.workingDir + '/', '')}  (score: ${r.score.toFixed(3)})\n     ${r.snippet}`).join('\n');
+                    sysMsg(`TF-IDF results for "${args}":\n${list}`);
+                    return;
+                }
+                sysMsg(`Searching for "${args}"…`);
+                const result = await executorRef.current.execute({ name: 'search_files', args: { pattern: args, path: '.' } });
+                sysMsg(result.success && result.output.trim() ? result.output : `No matches found for: ${args}\n\nTip: run /index first for semantic search.`);
+                return;
+            }
+            case '/init': {
+                sysMsg('Analyzing project…');
+                setMood('thinking');
+                try {
+                    // Gather project signals
+                    const signals = [];
+                    const tryRead = (f) => { try {
+                        return fs.readFileSync(path.join(session.workingDir, f), 'utf8').slice(0, 500);
+                    }
+                    catch {
+                        return null;
+                    } };
+                    const pkgFile = tryRead('package.json');
+                    const cargo = tryRead('Cargo.toml');
+                    const pyproj = tryRead('pyproject.toml');
+                    const gomod = tryRead('go.mod');
+                    const readme = tryRead('README.md') ?? tryRead('README');
+                    if (pkgFile)
+                        signals.push(`package.json:\n${pkgFile}`);
+                    if (cargo)
+                        signals.push(`Cargo.toml:\n${cargo}`);
+                    if (pyproj)
+                        signals.push(`pyproject.toml:\n${pyproj}`);
+                    if (gomod)
+                        signals.push(`go.mod:\n${gomod}`);
+                    if (readme)
+                        signals.push(`README:\n${readme}`);
+                    const dirResult = await executorRef.current.execute({ name: 'list_dir', args: { path: '.', recursive: true } });
+                    signals.push(`Directory structure:\n${dirResult.output.slice(0, 1000)}`);
+                    const prompt = `Generate a .nyx.md project configuration file for an AI coding assistant named Nyx.\n\nBased on this project info:\n${signals.join('\n\n')}\n\nThe .nyx.md should include:\n1. A brief description of what this project does\n2. Key technologies, frameworks, and conventions\n3. Important files and their purpose\n4. How to run tests and build\n5. Any gotchas or things the AI should know\n\nFormat it as clean markdown. Be concise and specific. This will be injected into every AI request.`;
+                    const initId = addDisplay({ role: 'assistant', content: '', streaming: true });
+                    let content = '';
+                    await streamProvider(session.provider, session.apiKeys, session.model, [{ role: 'user', content: prompt }], (chunk) => { if (chunk.text) {
+                        content += chunk.text;
+                        updateDisplay(initId, { content, streaming: true });
+                    } });
+                    updateDisplay(initId, { content, streaming: false });
+                    const nyxMdPath = path.join(session.workingDir, '.nyx.md');
+                    fs.writeFileSync(nyxMdPath, content.trim(), 'utf8');
+                    sysMsg(`.nyx.md created at ${nyxMdPath}\nRestart or run /memory to reload.`);
+                    setMood('happy');
+                }
+                catch (err) {
+                    sysMsg(`Init failed: ${err instanceof Error ? err.message : String(err)}`, true);
+                    setMood('error');
+                }
+                return;
+            }
+            case '/doctor': {
+                setMood('thinking');
+                const checks = [];
+                // Node.js
+                checks.push({ label: 'Node.js', status: process.version, ok: true });
+                // Ollama
+                try {
+                    const res = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(2000) });
+                    if (res.ok) {
+                        const data = await res.json();
+                        checks.push({ label: 'Ollama', status: `running — ${data.models.length} model${data.models.length !== 1 ? 's' : ''}`, ok: true });
+                    }
+                    else {
+                        checks.push({ label: 'Ollama', status: 'reachable but returned error', ok: false });
+                    }
+                }
+                catch {
+                    checks.push({ label: 'Ollama', status: 'not running (start with: ollama serve)', ok: false });
+                }
+                // API keys
+                for (const [p, cfg] of Object.entries(PROVIDERS)) {
+                    if (cfg.requiresKey) {
+                        const has = !!session.apiKeys[p];
+                        checks.push({ label: `${cfg.displayName} key`, status: has ? 'set' : 'missing — use /apikey', ok: has });
+                    }
+                }
+                // Git
+                const gitCheck = await executorRef.current.execute({ name: 'git_operation', args: { args: 'rev-parse --git-dir' } });
+                checks.push({ label: 'Git repo', status: gitCheck.success ? 'yes' : 'not a git repo', ok: gitCheck.success });
+                // Memory files
+                const memories = loadNyxMemories(session.workingDir);
+                checks.push({ label: '.nyx.md memory', status: memories.length ? memories.map((m) => path.basename(path.dirname(m.source)) + '/' + path.basename(m.source)).join(', ') : 'none — use /init', ok: memories.length > 0 });
+                // MCP
+                const mcpSrv = mcpRef.current.getStatus();
+                checks.push({ label: 'MCP servers', status: mcpSrv.length ? mcpSrv.map((s) => `${s.name}(${s.connected ? '✓' : '✕'})`).join(' ') : 'none', ok: true });
+                // Hooks
+                const hookTotal = [...(hooksRef.current.PreToolUse ?? []), ...(hooksRef.current.PostToolUse ?? []), ...(hooksRef.current.Notification ?? [])].length;
+                checks.push({ label: 'Hooks', status: hookTotal ? `${hookTotal} configured` : 'none (optional)', ok: true });
+                // Plugins
+                checks.push({ label: 'Plugins', status: pluginsRef.current.length ? `${pluginsRef.current.length} loaded` : 'none', ok: true });
+                // Search index
+                checks.push({ label: 'Search index', status: searchIndexRef.current ? `${searchIndexRef.current.files.length} files` : 'not built (run /index)', ok: !!searchIndexRef.current });
+                const W = 22;
+                const out = checks.map((c) => `  ${c.ok ? '✓' : '✕'} ${c.label.padEnd(W)} ${c.status}`).join('\n');
+                sysMsg(`LocalCode Doctor\n\n${out}\n\nMode: ${session.approvalMode}  Steps: ${session.maxSteps}  Theme: ${session.theme ?? 'dark'}  Provider: ${PROVIDERS[session.provider].displayName}`);
+                setMood('idle');
+                return;
+            }
+            case '/memory': {
+                const subCmd = args.trim().toLowerCase();
+                if (subCmd === 'edit') {
+                    const editor = process.env.EDITOR || (process.platform === 'darwin' ? 'nano' : 'nano');
+                    const globalNyx = path.join(os.homedir(), '.nyx.md');
+                    if (!fs.existsSync(globalNyx)) {
+                        fs.writeFileSync(globalNyx, `# Nyx Global Memory\n\nAdd notes here that Nyx should always know about you.\n`, 'utf8');
+                    }
+                    execFile(editor, [globalNyx], (err) => {
+                        if (err)
+                            sysMsg(`Could not open editor: ${err.message}`, true);
+                        else
+                            sysMsg(`Saved. Restart LocalCode to reload memory.`);
+                    });
+                    sysMsg(`Opening ${globalNyx} in ${editor}…`);
+                    return;
+                }
+                const memories = loadNyxMemories(session.workingDir);
+                const lines = [
+                    'Memory files (.nyx.md hierarchy):',
+                    '',
+                    `  ${memories.find((m) => m.source.includes(os.homedir())) ? '✓' : '·'} Global   ${path.join(os.homedir(), '.nyx.md')}${memories.find((m) => m.source.includes(os.homedir())) ? '' : '  (not found)'}`,
+                    `  ${memories.find((m) => m.source.includes(session.workingDir)) ? '✓' : '·'} Project  ${path.join(session.workingDir, '.nyx.md')}${memories.find((m) => m.source.includes(session.workingDir)) ? '' : '  (not found — use /init)'}`,
+                    '',
+                    `Pinned context items: ${session.pinnedContext.length}`,
+                    '',
+                    'Commands:',
+                    '  /memory edit   — edit global ~/.nyx.md',
+                    '  /init          — generate project .nyx.md from codebase',
+                ];
+                sysMsg(lines.join('\n'));
+                return;
+            }
+            case '/hooks': {
+                const hooksPath = path.join(os.homedir(), '.localcode', 'hooks.json');
+                const loaded = hooksRef.current;
+                const total = [...(loaded.PreToolUse ?? []), ...(loaded.PostToolUse ?? []), ...(loaded.Notification ?? [])].length;
+                if (!total) {
+                    sysMsg(`No hooks configured.\n\n` +
+                        `Create ${hooksPath} to add hooks:\n` +
+                        `{\n` +
+                        `  "PreToolUse": [{ "matcher": "write_file", "command": "echo writing $LC_TOOL_PATH" }],\n` +
+                        `  "PostToolUse": [{ "matcher": "write_file", "command": "prettier --write \\"$LC_TOOL_PATH\\" 2>/dev/null" }],\n` +
+                        `  "Notification": [{ "command": "say done" }]\n` +
+                        `}\n\n` +
+                        `Env vars: LC_TOOL_NAME, LC_TOOL_ARGS, LC_TOOL_OUTPUT, LC_TOOL_PATH`);
+                }
+                else {
+                    const lines = [
+                        `Hooks loaded from ${hooksPath}:`,
+                        ...(loaded.PreToolUse ?? []).map((h) => `  PreToolUse   ${h.matcher ? `[${h.matcher}] ` : ''}→ ${h.command}`),
+                        ...(loaded.PostToolUse ?? []).map((h) => `  PostToolUse  ${h.matcher ? `[${h.matcher}] ` : ''}→ ${h.command}`),
+                        ...(loaded.Notification ?? []).map((h) => `  Notification → ${h.command}`),
+                    ];
+                    sysMsg(lines.join('\n'));
                 }
                 return;
             }
@@ -579,193 +1670,82 @@ export function App({ initialState }) {
                 sysMsg('MCP commands:\n  /mcp list          — show servers\n  /mcp tools         — show all tools\n  /mcp add <n> stdio <cmd>  — add stdio server\n  /mcp add <n> http <url>   — add HTTP server\n  /mcp remove <n>    — remove server\n  /mcp connect       — reconnect all saved servers');
                 return;
             }
+            case '/cd': {
+                if (!args) {
+                    sysMsg(`Current working directory: ${session.workingDir}\nUsage: /cd <path>`);
+                    return;
+                }
+                const newDir = path.isAbsolute(args) ? args : path.join(session.workingDir, args);
+                if (!fs.existsSync(newDir) || !fs.statSync(newDir).isDirectory()) {
+                    sysMsg(`Not a directory: ${newDir}`, true);
+                    return;
+                }
+                const resolved = path.resolve(newDir);
+                executorRef.current = new ToolExecutor(resolved);
+                setSession((s) => ({ ...s, workingDir: resolved }));
+                sysMsg(`Working directory → ${resolved}`);
+                return;
+            }
+            case '/ping': {
+                const pingAll = args === 'all';
+                const providersToPing = pingAll
+                    ? Object.keys(PROVIDERS).filter(p => !PROVIDERS[p].requiresKey || session.apiKeys[p])
+                    : [session.provider];
+                if (pingAll) {
+                    sysMsg(`Pinging ${providersToPing.length} configured providers…`);
+                }
+                else {
+                    sysMsg(`Testing connection to ${PROVIDERS[session.provider].displayName}…`);
+                }
+                setMood('thinking');
+                const pingResults = [];
+                await Promise.all(providersToPing.map(async (p) => {
+                    try {
+                        const startMs = Date.now();
+                        await streamProvider(p, session.apiKeys, PROVIDERS[p].defaultModel, [{ role: 'user', content: 'Reply with only: pong' }], () => { });
+                        const ms = Date.now() - startMs;
+                        pingResults.push(`  ✓  ${PROVIDERS[p].displayName.padEnd(10)}  ${ms}ms`);
+                    }
+                    catch (err) {
+                        pingResults.push(`  ✕  ${PROVIDERS[p].displayName.padEnd(10)}  ${err instanceof Error ? err.message.slice(0, 50) : 'failed'}`);
+                    }
+                }));
+                if (pingAll) {
+                    sysMsg(`Ping results:\n${pingResults.join('\n')}`);
+                }
+                else {
+                    sysMsg(pingResults[0] ?? '✕ No result');
+                }
+                setMood(pingResults.every(r => r.startsWith('  ✓')) ? 'happy' : 'error');
+                return;
+            }
+            case '/ls': {
+                const target = args || '.';
+                const result = await executorRef.current.execute({ name: 'list_dir', args: { path: target, recursive: false } });
+                sysMsg(result.success ? result.output : `Could not list: ${target}`);
+                return;
+            }
+            case '/find': {
+                if (!args) {
+                    sysMsg('Usage: /find <filename-pattern>  e.g. /find *.ts');
+                    return;
+                }
+                const result = await executorRef.current.execute({ name: 'find_files', args: { pattern: args } });
+                sysMsg(result.success && result.output.trim() ? result.output : `No files matching: ${args}`);
+                return;
+            }
             case '/exit': {
-                saveSession(session);
+                try {
+                    saveSession(session);
+                }
+                catch { /* exit regardless */ }
                 exit();
                 return;
             }
             default:
                 sysMsg(`Unknown command: ${cmd}. Type / to see all commands.`, true);
         }
-    }, [session, sysMsg, addDisplay, exit]);
-    // ── Main send handler ─────────────────────────────────────────────────────────
-    const sendMessage = useCallback(async (text) => {
-        if (!text.trim() || isStreaming)
-            return;
-        // Add to history
-        setHistory((h) => [text, ...h.slice(0, 99)]);
-        setHistoryIndex(-1);
-        setInput('');
-        // Handle @context syntax inline
-        let processedText = text;
-        const atMatches = text.match(/@[\w./\\-]+/g) ?? [];
-        for (const match of atMatches) {
-            const p = match.slice(1);
-            const result = await executorRef.current.execute({ name: 'read_file', args: { path: p } });
-            if (result.success) {
-                processedText = processedText.replace(match, `\n\`\`\`${p}\n${result.output}\n\`\`\``);
-            }
-        }
-        const userMsg = { role: 'user', content: processedText };
-        addDisplay({ role: 'user', content: text });
-        setSession((s) => {
-            const updated = { ...s, messages: [...s.messages, userMsg] };
-            return updated;
-        });
-        setIsStreaming(true);
-        setMood('thinking');
-        // Create streaming display message
-        const streamId = addDisplay({ role: 'assistant', content: '', streaming: true });
-        streamingIdRef.current = streamId;
-        let accumulated = '';
-        // We need the current session state
-        const currentSession = session;
-        const run = async () => {
-            const pinnedMsg = currentSession.pinnedContext.length
-                ? [{ role: 'user', content: `[Pinned context — always relevant]\n${currentSession.pinnedContext.join('\n')}` }]
-                : [];
-            const msgs = [...pinnedMsg, ...currentSession.messages, userMsg];
-            // Merge built-in tools with MCP tools
-            const mcpToolDefs = mcpRef.current.getToolDefinitions();
-            const allTools = [...BUILTIN_TOOLS, ...mcpToolDefs];
-            await runAgent(currentSession.provider, currentSession.apiKeys, currentSession.model, msgs, async (chunk) => {
-                switch (chunk.type) {
-                    case 'agent_step':
-                        if ((chunk.step ?? 0) > 0) {
-                            // Show step indicator after first iteration
-                            addDisplay({
-                                role: 'system',
-                                content: `⟳  Step ${(chunk.step ?? 0) + 1}/${chunk.maxSteps}`,
-                            });
-                        }
-                        break;
-                    case 'text':
-                        accumulated += chunk.text ?? '';
-                        updateDisplay(streamId, { content: accumulated, streaming: true });
-                        break;
-                    case 'tool_call': {
-                        const toolCall = chunk.toolCall;
-                        updateDisplay(streamId, { content: accumulated, streaming: false });
-                        const toolDisplayId = addDisplay({
-                            role: 'tool',
-                            content: `${toolCall.name}(${Object.entries(toolCall.args)
-                                .slice(0, 2)
-                                .map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`)
-                                .join(', ')})`,
-                            toolName: toolCall.name,
-                            streaming: true,
-                        });
-                        let allowed = currentSession.allowAllTools;
-                        let allowAll = false;
-                        if (!allowed && needsPermission(toolCall)) {
-                            setMood('waiting');
-                            const perm = await requestPermission(toolCall);
-                            allowed = perm.allowed;
-                            allowAll = perm.allowAll;
-                            if (allowAll)
-                                setSession((s) => ({ ...s, allowAllTools: true }));
-                            setMood('thinking');
-                        }
-                        else {
-                            allowed = true;
-                        }
-                        if (!allowed) {
-                            updateDisplay(toolDisplayId, { content: `${toolCall.name} — denied`, streaming: false, isError: true });
-                        }
-                        break;
-                    }
-                    case 'done':
-                        updateDisplay(streamId, { streaming: false });
-                        if (accumulated.trim()) {
-                            const inputTokens = Math.ceil(msgs.reduce((a, m) => a + m.content.length, 0) / 4);
-                            const outputTokens = Math.ceil(accumulated.length / 4);
-                            const cost = estimateCost(currentSession.model, inputTokens, outputTokens);
-                            setSession((s) => {
-                                const newMessages = [
-                                    ...s.messages,
-                                    userMsg,
-                                    { role: 'assistant', content: accumulated },
-                                ];
-                                const shouldCheckpoint = s.autoCheckpoint && newMessages.length % 20 === 0;
-                                const checkpoints = shouldCheckpoint
-                                    ? [...s.checkpoints, {
-                                            id: `cp_auto_${Date.now()}`,
-                                            label: `auto-${newMessages.length}msgs`,
-                                            timestamp: Date.now(),
-                                            messages: newMessages,
-                                            files: {},
-                                        }]
-                                    : s.checkpoints;
-                                if (shouldCheckpoint)
-                                    setTimeout(() => sysMsg(`Auto-checkpoint saved.`), 100);
-                                return {
-                                    ...s,
-                                    messages: newMessages,
-                                    lastAssistantMessage: accumulated,
-                                    sessionCost: s.sessionCost + cost,
-                                    checkpoints,
-                                };
-                            });
-                        }
-                        break;
-                    case 'error':
-                        updateDisplay(streamId, { content: chunk.error ?? 'Unknown error', streaming: false, isError: true });
-                        setMood('error');
-                        break;
-                }
-            }, {
-                maxSteps: 20,
-                tools: allTools,
-                onToolCall: async (toolCall) => {
-                    if (!currentSession.allowAllTools && needsPermission(toolCall)) {
-                        setMood('waiting');
-                        const perm = await requestPermission(toolCall);
-                        if (perm.allowAll)
-                            setSession((s) => ({ ...s, allowAllTools: true }));
-                        setMood('thinking');
-                        return perm;
-                    }
-                    return { allowed: true, allowAll: false };
-                },
-                onToolResult: (toolCall, output, diff) => {
-                    const isMcp = mcpRef.current.isMcpTool(toolCall.name);
-                    addDisplay({
-                        role: 'tool',
-                        content: `${toolCall.name} → ${output.slice(0, 120)}`,
-                        toolName: toolCall.name,
-                        streaming: false,
-                    });
-                    if (diff && typeof diff === 'object' && 'additions' in diff) {
-                        const d = diff;
-                        addDisplay({ role: 'system', content: `  ${d.path}  +${d.additions} -${d.deletions}` });
-                    }
-                },
-                executeTool: async (toolCall) => {
-                    // Route MCP tools to MCP manager, built-in tools to executor
-                    if (mcpRef.current.isMcpTool(toolCall.name)) {
-                        const result = await mcpRef.current.callTool(toolCall.name, toolCall.args);
-                        return { success: result.success, output: result.output };
-                    }
-                    return executorRef.current.execute(toolCall);
-                },
-            }, currentSession.systemPrompt);
-        };
-        try {
-            await run();
-        }
-        catch (err) {
-            updateDisplay(streamId, {
-                content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                streaming: false,
-                isError: true,
-            });
-            setMood('error');
-        }
-        finally {
-            setIsStreaming(false);
-            setMood((m) => (m === 'thinking' || m === 'waiting' ? 'idle' : m));
-        }
-    }, [isStreaming, session, addDisplay, updateDisplay, requestPermission]);
+    }, [session, sysMsg, addDisplay, updateDisplay, exit, sendMessage, isStreaming]);
     // ── Input handling ────────────────────────────────────────────────────────────
     const handleInputChange = useCallback((val) => {
         setInput(val);
@@ -781,14 +1761,20 @@ export function App({ initialState }) {
         }
     }, []);
     const handleSubmit = useCallback(async (val) => {
+        // If in multiline mode, Enter appends to buffer (don't submit)
+        if (isMultiline) {
+            setMultilineBuffer((prev) => [...prev, input]);
+            setInput('');
+            return;
+        }
         const v = val.trim();
         if (!v)
             return;
         if (showPicker) {
             // Select the highlighted command from filtered list
-            const q = pickerQuery.toLowerCase();
-            const filtered = q
-                ? SLASH_COMMANDS.filter((c) => c.name.startsWith(q) || c.description.toLowerCase().includes(q) || c.trigger.includes(q))
+            const qLower = pickerQuery.toLowerCase();
+            const filtered = qLower
+                ? SLASH_COMMANDS.filter((c) => c.name.startsWith(qLower) || c.description.toLowerCase().includes(qLower) || c.trigger.includes(qLower))
                 : SLASH_COMMANDS;
             const selected = filtered[Math.min(pickerSelectedIndex, filtered.length - 1)];
             if (selected) {
@@ -806,7 +1792,7 @@ export function App({ initialState }) {
             return;
         }
         await sendMessage(v);
-    }, [showPicker, pickerQuery, pickerSelectedIndex, handleSlashCommand, sendMessage]);
+    }, [isMultiline, input, showPicker, pickerQuery, pickerSelectedIndex, handleSlashCommand, sendMessage]);
     useInput((inputChar, key) => {
         // Permission prompt input
         if (pendingPermission) {
@@ -817,6 +1803,57 @@ export function App({ initialState }) {
             else if (inputChar === 'n')
                 pendingPermission.resolve(false, false);
             return;
+        }
+        // Pending test fix prompt
+        if (pendingTestFix !== null) {
+            if (inputChar === 'y' || inputChar === 'Y') {
+                const testOutput = pendingTestFix;
+                setPendingTestFix(null);
+                sendMessage(`Tests failed. Please fix the following test failures:\n\n${testOutput.slice(0, 4000)}`);
+            }
+            else {
+                setPendingTestFix(null);
+            }
+            return;
+        }
+        // Ctrl+E — toggle multiline mode
+        if (key.ctrl && inputChar === 'e' && !isStreaming && !pendingPermission) {
+            if (isMultiline) {
+                // Exit multiline, discard buffer
+                setIsMultiline(false);
+                setMultilineBuffer([]);
+                setInput('');
+                sysMsg('Multiline mode cancelled.');
+            }
+            else {
+                setIsMultiline(true);
+                setMultilineBuffer([]);
+                sysMsg('Multiline mode — Enter adds line, Ctrl+D sends, Ctrl+E cancels.');
+            }
+            return;
+        }
+        // Ctrl+D in multiline — submit
+        if (key.ctrl && inputChar === 'd' && isMultiline && !isStreaming) {
+            const fullText = [...multilineBuffer, input].join('\n').trim();
+            if (fullText) {
+                setIsMultiline(false);
+                setMultilineBuffer([]);
+                setInput('');
+                sendMessage(fullText);
+            }
+            return;
+        }
+        // Escape — cancel streaming or close picker
+        if (key.escape) {
+            if (isStreaming) {
+                abortRef.current?.abort();
+                return;
+            }
+            if (showPicker) {
+                setShowPicker(false);
+                setInput('');
+                return;
+            }
         }
         // Picker navigation
         if (showPicker) {
@@ -829,11 +1866,6 @@ export function App({ initialState }) {
             }
             if (key.downArrow) {
                 setPickerSelectedIndex((i) => Math.min(filtered.length - 1, i + 1));
-                return;
-            }
-            if (key.escape) {
-                setShowPicker(false);
-                setInput('');
                 return;
             }
             if (key.return) {
@@ -862,48 +1894,89 @@ export function App({ initialState }) {
             }
         }
         if (key.ctrl && inputChar === 'c') {
-            saveSession(session);
+            try {
+                saveSession(session);
+            }
+            catch { /* exit regardless */ }
             exit();
         }
     });
     // ── Render ────────────────────────────────────────────────────────────────────
     const termHeight = stdout?.rows ?? 24;
     const maxMessages = Math.max(5, termHeight - 12);
+    const borderColor = isStreaming ? 'gray' : isMultiline ? theme.tool : theme.border;
     return (React.createElement(Box, { flexDirection: "column", height: termHeight },
-        React.createElement(NyxHeader, { mood: mood, provider: session.provider, model: session.model, workingDir: session.workingDir, tokenCount: estimateTokens(session.messages), allowAll: session.allowAllTools, persona: session.activePersona, sessionCost: session.sessionCost }),
-        React.createElement(Box, { flexDirection: "column", flexGrow: 1, overflowY: "hidden" }, displayMessages.slice(-maxMessages).map((msg) => (React.createElement(MessageRow, { key: msg.id, msg: msg })))),
+        React.createElement(NyxHeader, { mood: mood, provider: session.provider, model: session.model, workingDir: session.workingDir, tokenCount: estimateTokens(session.messages), approvalMode: session.approvalMode, persona: session.activePersona, sessionCost: session.sessionCost, version: pkg.version, liveTokens: isStreaming ? streamingTokens : undefined }),
+        React.createElement(Box, { flexDirection: "column", flexGrow: 1, overflowY: "hidden" }, displayMessages.slice(-maxMessages).map((msg) => (React.createElement(MessageRow, { key: msg.id, msg: msg, spinnerFrame: spinnerFrame, theme: theme })))),
         pendingPermission && (React.createElement(PermissionPrompt, { toolCall: pendingPermission.toolCall })),
         showPicker && (React.createElement(CommandPicker, { query: pickerQuery, selectedIndex: pickerSelectedIndex, onSelect: (cmd) => {
                 setInput('');
                 setShowPicker(false);
                 handleSlashCommand(cmd.trigger);
             }, onDismiss: () => { setShowPicker(false); setInput(''); } })),
-        React.createElement(Box, { borderStyle: "round", borderColor: isStreaming ? 'gray' : 'yellowBright', paddingX: 1, flexDirection: "row" },
-            React.createElement(Text, { color: isStreaming ? 'gray' : 'yellowBright' }, isStreaming ? '⟳ ' : '❯ '),
-            isStreaming ? (React.createElement(Text, { color: "gray", dimColor: true }, "Generating\u2026")) : (React.createElement(TextInput, { value: input, onChange: handleInputChange, onSubmit: handleSubmit, placeholder: "Message Nyx\u2026  (/ for commands)" }))),
-        React.createElement(Box, null,
-            React.createElement(Text, { color: "gray", dimColor: true }, '  ctrl+c exit  / commands  @file context  ↑↓ history'))));
+        React.createElement(Box, { borderStyle: "round", borderColor: borderColor, paddingX: 1, flexDirection: "row" },
+            React.createElement(Text, { color: borderColor }, isStreaming ? `${SPINNER_FRAMES[spinnerFrame]} ` : isMultiline ? '¶ ' : '❯ '),
+            isMultiline ? (React.createElement(Box, { flexDirection: "column" },
+                multilineBuffer.map((line, i) => (React.createElement(Box, { key: i, flexDirection: "row" },
+                    React.createElement(Text, { color: "gray", dimColor: true },
+                        String(i + 1).padStart(2, ' '),
+                        " \u2502 "),
+                    React.createElement(Text, { color: "white", wrap: "wrap" }, line)))),
+                React.createElement(Box, { flexDirection: "row" },
+                    React.createElement(Text, { color: "gray", dimColor: true },
+                        String(multilineBuffer.length + 1).padStart(2, ' '),
+                        " \u2502 "),
+                    React.createElement(TextInput, { value: input, onChange: handleInputChange, onSubmit: handleSubmit, placeholder: "\u2026" })),
+                React.createElement(Text, { color: "gray", dimColor: true }, "  ctrl+d send  ctrl+e cancel"))) : isStreaming ? (React.createElement(Text, { color: "gray", dimColor: true }, "Generating\u2026")) : (React.createElement(TextInput, { value: input, onChange: handleInputChange, onSubmit: handleSubmit, placeholder: "Message Nyx\u2026  (/ for commands)" }))),
+        React.createElement(Box, { flexDirection: "row", justifyContent: "space-between" },
+            React.createElement(Text, { color: "gray", dimColor: true }, '  ctrl+c exit  esc cancel  ctrl+e multiline  / commands  @file context  ↑↓ history'),
+            input.length > 50 && (React.createElement(Text, { color: input.length > 2000 ? 'yellow' : 'gray', dimColor: true }, `${input.length}c  `)))));
 }
-// ─── Message row component ─────────────────────────────────────────────────────
-function MessageRow({ msg }) {
+function MessageRow({ msg, spinnerFrame, theme, }) {
     const roleColors = {
-        user: 'yellowBright',
-        assistant: 'white',
-        system: 'gray',
-        tool: 'cyan',
+        user: theme.primary,
+        assistant: theme.accent,
+        system: theme.system,
+        tool: theme.tool,
     };
     const roleIcons = {
         user: '❯ ',
         assistant: '◈ ',
         system: '· ',
-        tool: '⟳ ',
+        tool: msg.streaming ? `${SPINNER_FRAMES[spinnerFrame]} ` : '⟳ ',
     };
-    const color = msg.isError ? 'red' : roleColors[msg.role] ?? 'white';
+    const color = msg.isError ? theme.error : roleColors[msg.role] ?? 'white';
+    const icon = roleIcons[msg.role] ?? '  ';
+    // Render assistant messages with markdown
+    if (msg.role === 'assistant' && msg.content) {
+        return (React.createElement(Box, { flexDirection: "row", marginBottom: 0 },
+            React.createElement(Text, { color: theme.accent }, icon),
+            React.createElement(Box, { flexGrow: 1, flexDirection: "column" },
+                React.createElement(MarkdownText, { content: msg.content, streaming: msg.streaming }))));
+    }
+    const timeStr = msg.timestamp
+        ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+        : null;
+    // Tool calls — show as compact inline box (truncated, max 200 chars shown)
+    if (msg.role === 'tool') {
+        const displayContent = msg.content;
+        return (React.createElement(Box, { flexDirection: "row", marginBottom: 0 },
+            React.createElement(Text, { color: theme.tool, dimColor: true }, icon),
+            React.createElement(Text, { color: msg.isError ? theme.error : theme.tool, dimColor: !msg.isError, wrap: "wrap" },
+                displayContent,
+                msg.streaming && React.createElement(Text, { color: "gray" }, " \u258C")),
+            timeStr && React.createElement(Text, { color: "gray", dimColor: true },
+                "  ",
+                timeStr)));
+    }
     return (React.createElement(Box, { flexDirection: "row", marginBottom: 0 },
-        React.createElement(Text, { color: color, dimColor: msg.role === 'system' }, roleIcons[msg.role] ?? '  '),
+        React.createElement(Text, { color: color, dimColor: msg.role === 'system' }, icon),
         React.createElement(Box, { flexGrow: 1, flexWrap: "wrap" },
-            React.createElement(Text, { color: color, dimColor: msg.role === 'system' },
+            React.createElement(Text, { color: color, dimColor: msg.role === 'system', wrap: "wrap" },
                 msg.content,
-                msg.streaming && React.createElement(Text, { color: "gray" }, " \u258C")))));
+                msg.streaming && React.createElement(Text, { color: "gray" }, " \u258C"))),
+        timeStr && msg.role === 'system' && React.createElement(Text, { color: "gray", dimColor: true },
+            "  ",
+            timeStr)));
 }
 //# sourceMappingURL=App.js.map

@@ -9,10 +9,15 @@ export declare class ToolExecutor {
     private readFile;
     private writeFile;
     private patchFile;
+    private deleteFile;
+    private moveFile;
     private runShell;
     private listDir;
+    private searchFiles;
+    private findFiles;
     private gitOperation;
     getSessionFiles(): Record<string, string>;
     undoLastChange(): string | null;
+    unifiedDiff(filePath: string): string | null;
 }
 //# sourceMappingURL=executor.d.ts.map
