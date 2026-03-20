@@ -119,6 +119,21 @@ export const BUILTIN_TOOLS = [
         },
     },
 ];
+/**
+ * Resolve which model to use for a given step number.
+ * planning = step 0, review = last step, execution = everything in between.
+ */
+export function resolveModelForStep(step, maxSteps, routing, defaultModel) {
+    if (!routing)
+        return defaultModel;
+    if (step === 0 && routing.planning)
+        return routing.planning;
+    if (step >= maxSteps - 1 && routing.review)
+        return routing.review;
+    if (routing.execution)
+        return routing.execution;
+    return defaultModel;
+}
 // ─── Ollama agent ─────────────────────────────────────────────────────────────
 async function runOllamaAgent(config, model, messages, onChunk, agentCfg, systemPrompt, signal) {
     const history = [];
@@ -136,6 +151,7 @@ async function runOllamaAgent(config, model, messages, onChunk, agentCfg, system
         function: { name: t.name, description: t.description, parameters: t.parameters },
     }));
     for (let step = 0; step < agentCfg.maxSteps; step++) {
+        const stepModel = resolveModelForStep(step, agentCfg.maxSteps, agentCfg.routing, model);
         if (signal?.aborted) {
             await onChunk({ type: 'error', error: 'Cancelled.' });
             return;
@@ -144,7 +160,7 @@ async function runOllamaAgent(config, model, messages, onChunk, agentCfg, system
         const res = await fetch(`${config.baseUrl}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, messages: history, stream: true, tools }),
+            body: JSON.stringify({ model: stepModel, messages: history, stream: true, tools }),
             signal,
         });
         if (!res.ok || !res.body) {
@@ -238,6 +254,7 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
         };
     });
     for (let step = 0; step < agentCfg.maxSteps; step++) {
+        const stepModel = resolveModelForStep(step, agentCfg.maxSteps, agentCfg.routing, model);
         if (signal?.aborted) {
             await onChunk({ type: 'error', error: 'Cancelled.' });
             return;
@@ -251,7 +268,7 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
                 'anthropic-version': '2023-06-01',
             },
             body: JSON.stringify({
-                model,
+                model: stepModel,
                 max_tokens: 8096,
                 system: systemPrompt,
                 messages: history,
@@ -332,7 +349,7 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
             }
         }
         history.push({ role: 'assistant', content: assistantContent });
-        if (!toolUses.length || stopReason === 'end_turn') {
+        if (!toolUses.length) {
             await onChunk({ type: 'done' });
             return;
         }
@@ -389,6 +406,7 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
         }
     }
     for (let step = 0; step < agentCfg.maxSteps; step++) {
+        const stepModel = resolveModelForStep(step, agentCfg.maxSteps, agentCfg.routing, model);
         if (signal?.aborted) {
             await onChunk({ type: 'error', error: 'Cancelled.' });
             return;
@@ -397,7 +415,7 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
         const res = await fetch(`${baseUrl}/v1/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({ model, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
+            body: JSON.stringify({ model: stepModel, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
             signal,
         });
         if (!res.ok || !res.body) {

@@ -1,4 +1,4 @@
-import { Provider, Message, ToolCall } from '../core/types.js';
+import { Provider, Message, ToolCall, ModelRouting } from '../core/types.js';
 export interface StreamChunk {
     type: 'text' | 'tool_call' | 'tool_result' | 'agent_step' | 'done' | 'error';
     text?: string;
@@ -27,7 +27,13 @@ export interface AgentConfig {
         output: string;
         diff?: unknown;
     }>;
+    routing?: ModelRouting | null;
 }
+/**
+ * Resolve which model to use for a given step number.
+ * planning = step 0, review = last step, execution = everything in between.
+ */
+export declare function resolveModelForStep(step: number, maxSteps: number, routing: ModelRouting | null | undefined, defaultModel: string): string;
 export declare function runAgent(provider: Provider, apiKeys: Partial<Record<Provider, string>>, model: string, messages: Message[], onChunk: ChunkCallback, agentCfg: AgentConfig, systemPrompt?: string, signal?: AbortSignal): Promise<void>;
 export declare function streamProvider(provider: Provider, apiKeys: Partial<Record<Provider, string>>, model: string, messages: Message[], onChunk: ChunkCallback, systemPrompt?: string): Promise<void>;
 export declare function estimateCost(model: string, inputTokens: number, outputTokens: number): number;

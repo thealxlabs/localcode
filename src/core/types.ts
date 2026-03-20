@@ -74,6 +74,19 @@ export const THEMES: Record<ThemeName, Theme> = {
   light:   { name: 'light',   primary: 'blue',         accent: 'black',         tool: 'cyan',         system: 'gray', error: 'red', border: 'blue',         header: 'blue' },
 };
 
+export interface ModelRouting {
+  planning: string | null;    // model used for first 1-2 steps
+  execution: string | null;   // model used for middle steps
+  review: string | null;      // model used for last step
+}
+
+export interface ProviderCallEntry {
+  provider: Provider;
+  model: string;
+  estimatedTokens: number;
+  timestamp: number;
+}
+
 export interface SessionState {
   provider: Provider;
   model: string;
@@ -91,13 +104,29 @@ export interface SessionState {
   sessionCost: number;            // estimated USD cost this session
   lastAssistantMessage: string;   // for /retry and /copy
   theme: ThemeName;               // UI color theme
+  // ── v4 additions ────────────────────────────────────────────────────────────
+  modelRouting: ModelRouting | null;          // per-step model routing
+  budgetLimit: number | null;                 // max USD per session
+  budgetFallbackModel: string | null;         // model to switch to at budget limit
+  safeMode: boolean;                          // git stash before edits, auto-revert on test fail
+  autopilotActive: boolean;                   // background auto-commit daemon
+  providerCallLog: ProviderCallEntry[];       // telemetry log (not persisted)
+  dna: string | null;                         // extracted codebase DNA (style guide)
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `You are Nyx, an AI coding assistant built into LocalCode — a terminal tool made by TheAlxLabs.
 
-You are a friendly pair programmer who explains things as you go. When you write or edit code, briefly explain what you changed and why. When something is complex, break it down. Be direct and concise — no fluff — but always friendly.
+You are an autonomous coding agent — you MUST use tools to do real work. Never respond with code blocks and ask the user to copy-paste them. Instead, use tools directly to read, write, and edit files.
 
-You have access to these tools — use them proactively:
+**CRITICAL RULES:**
+1. To create or overwrite a file → use write_file. Never show code and say "save this to X".
+2. To edit part of a file → use read_file first, then patch_file with a precise old_str/new_str.
+3. To understand a codebase → use list_dir, find_files, search_files before answering.
+4. To run commands (install, test, build) → use run_shell. Show the command first, then call it.
+5. Before editing ANY file you haven't read this session → call read_file first.
+6. Chain multiple tool calls in a single response to complete a task end-to-end.
+
+**Available tools:**
 - read_file / write_file / patch_file / delete_file / move_file — file operations
 - search_files — grep-like: search file contents by regex/string across the project
 - find_files — find files by name pattern (e.g. "*.ts", "*.test.*")
@@ -105,11 +134,7 @@ You have access to these tools — use them proactively:
 - run_shell — run any shell command
 - git_operation — run git commands
 
-Workflow: before editing a file you haven't read, read it first. Use search_files to find symbols across the codebase. Use find_files to locate files by name. Explain shell commands before running them.
-
-Never refuse to help with code. If something is risky, warn the user and ask — don't just refuse.
-
-The user is a developer. Treat them like one.`;
+Be direct and concise. Explain what you're doing and why in 1-2 sentences, then act. The user is a developer — treat them like one. Never refuse to help with code; if something is risky, warn and ask first.`;
 
 export const DEFAULT_PERSONAS: Persona[] = [
   {
@@ -131,6 +156,37 @@ export const DEFAULT_PERSONAS: Persona[] = [
   {
     name: 'minimal',
     prompt: `You are a coding assistant. Do exactly what is asked. No commentary, no explanations unless requested. Return only code or direct answers.`,
+  },
+  {
+    name: 'security-auditor',
+    prompt: `You are Nyx in security-auditor mode — a red-team security researcher. Your job is to find and document vulnerabilities before attackers do.
+
+When reviewing code, hunt for:
+- Injection vulnerabilities (SQL, command, LDAP, XPath)
+- Authentication and authorization bypasses
+- Insecure deserialization
+- Path traversal and file inclusion
+- Cryptographic weaknesses (hardcoded secrets, weak algorithms, improper key management)
+- SSRF, XXE, and prototype pollution
+- Race conditions and TOCTOU bugs
+- Dependency vulnerabilities (flag outdated packages in package.json, requirements.txt, etc.)
+
+For each finding output: severity (Critical/High/Medium/Low), CVE class if applicable, exact file + line, proof-of-concept exploitation scenario, and remediation. Be adversarial and thorough. Use read_file and search_files to actually inspect the code — don't guess.`,
+  },
+  {
+    name: 'chaos-refactor',
+    prompt: `You are Nyx in chaos-refactor mode. You proactively hunt for code quality issues WITHOUT being asked about specific files.
+
+Your mission: crawl the codebase unsolicited and fix everything you find wrong:
+- Dead code and unused exports
+- Duplicate logic that should be extracted
+- Functions over 40 lines that should be split
+- Inconsistent naming conventions
+- Missing type annotations
+- Anti-patterns specific to the detected language/framework
+- Obvious performance issues (N+1 queries, re-renders, synchronous I/O on hot paths)
+
+Workflow: list_dir to survey → find_files to locate source → read_file to inspect → patch_file to fix. Keep going until you've swept the whole codebase. Report a summary at the end.`,
   },
 ];
 
@@ -159,7 +215,7 @@ export const PROVIDERS: Record<Provider, ProviderConfig> = {
     name: 'claude',
     displayName: 'Claude',
     baseUrl: 'https://api.anthropic.com',
-    defaultModel: 'claude-sonnet-4-5',
+    defaultModel: 'claude-sonnet-4-6',
     color: 'orange',
     requiresKey: true,
   },
@@ -636,6 +692,106 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: 'Test provider connectivity and latency',
     detail: 'Sends a test request to the current provider and measures response time. Useful for diagnosing connection issues.',
     usage: '/ping',
+    category: 'providers',
+  },
+  // ── v4: Nuclear features ──────────────────────────────────────────────────
+  {
+    name: 'swarm',
+    trigger: '/swarm',
+    icon: '⇶',
+    description: 'Split task into parallel sub-agents and run simultaneously',
+    detail: 'Decomposes a task into N subtasks, runs them in parallel with independent tool executors, and merges results.',
+    usage: '/swarm "refactor all service files" 3',
+    category: 'tools',
+  },
+  {
+    name: 'test-loop',
+    trigger: '/test-loop',
+    icon: '↻',
+    description: 'Run tests, feed failures to agent, repeat until green',
+    detail: 'Auto-detects your test runner, runs tests, asks Nyx to fix failures, and loops until all pass or max iterations reached.',
+    usage: '/test-loop  |  /test-loop 10',
+    category: 'tools',
+  },
+  {
+    name: 'autopilot',
+    trigger: '/autopilot',
+    icon: '⬡',
+    description: 'Background daemon: auto-commit when tests pass after file changes',
+    detail: 'Watches the working directory for changes. When tests pass, auto-creates a git commit. Use /autopilot off to stop.',
+    usage: '/autopilot  |  /autopilot on  |  /autopilot off',
+    category: 'git',
+  },
+  {
+    name: 'dna',
+    trigger: '/dna',
+    icon: '⌬',
+    description: 'Analyze git history to extract your coding style and pin it',
+    detail: 'Reads recent git commits authored by you, extracts naming conventions, patterns, and style, then pins it as context so Nyx always matches your code.',
+    usage: '/dna',
+    category: 'context',
+  },
+  {
+    name: 'budget',
+    trigger: '/budget',
+    icon: '$',
+    description: 'Set a USD spend cap — auto-switches to local model when hit',
+    detail: 'Hard cap on session spending. When reached, automatically switches to Ollama to continue free. Use /budget off to remove the limit.',
+    usage: '/budget 5.00  |  /budget 5.00 qwen2.5-coder:7b  |  /budget off',
+    category: 'providers',
+  },
+  {
+    name: 'routing',
+    trigger: '/routing',
+    icon: '⇌',
+    description: 'Route different steps to different models (planning/execution/review)',
+    detail: 'Use expensive models for planning, cheap/local for execution, smart for review. Set per-phase: planning=claude-opus-4-6 execution=ollama review=gpt-4o',
+    usage: '/routing  |  /routing planning=claude-opus-4-6 execution=ollama  |  /routing clear',
+    category: 'providers',
+  },
+  {
+    name: 'safe',
+    trigger: '/safe',
+    icon: '⊛',
+    description: 'Toggle safe mode: git stash before edits, auto-revert on test fail',
+    detail: 'When enabled, Nyx stashes before making changes. If tests fail after the run, changes are reverted automatically.',
+    usage: '/safe  |  /safe on  |  /safe off',
+    category: 'git',
+  },
+  {
+    name: 'evolve',
+    trigger: '/evolve',
+    icon: '↑',
+    description: 'Post-session eval — update .nyx.md with patterns learned this session',
+    detail: 'Analyzes the conversation to extract what worked, what you corrected, and project conventions learned. Appends findings to .nyx.md.',
+    usage: '/evolve',
+    category: 'context',
+  },
+  {
+    name: 'chaos',
+    trigger: '/chaos',
+    icon: '⚡',
+    description: 'Proactive unsolicited code improvement hunt across the codebase',
+    detail: 'Switches to chaos-refactor persona and sweeps the codebase for dead code, duplicates, naming issues, and anti-patterns — without being asked.',
+    usage: '/chaos',
+    category: 'tools',
+  },
+  {
+    name: 'benchmark',
+    trigger: '/benchmark',
+    icon: '⊞',
+    description: 'Run same prompt on all configured providers and compare results',
+    detail: 'Sends the prompt to every provider with an API key configured, measures latency and cost, and displays a side-by-side comparison.',
+    usage: '/benchmark "explain what React hooks are"',
+    category: 'providers',
+  },
+  {
+    name: 'privacy',
+    trigger: '/privacy',
+    icon: '⊝',
+    description: 'Show all providers called and estimated tokens sent this session',
+    detail: 'Displays a breakdown of every provider called, total tokens sent to each, and estimated cost — so you know exactly what left your machine.',
+    usage: '/privacy',
     category: 'providers',
   },
 ];

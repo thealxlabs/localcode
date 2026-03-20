@@ -64,7 +64,7 @@ export function Setup({ onComplete }: SetupProps): React.ReactElement {
       model: defaultModel,
       messages: [],
       checkpoints: [],
-      approvalMode: 'suggest' as ApprovalMode,
+      approvalMode: 'auto-edit' as ApprovalMode,
       workingDir: process.cwd(),
       apiKeys: finalKey ? { [finalProvider]: finalKey } as any : {},
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -76,6 +76,13 @@ export function Setup({ onComplete }: SetupProps): React.ReactElement {
       sessionCost: 0,
       lastAssistantMessage: '',
       theme: 'dark',
+      modelRouting: null,
+      budgetLimit: null,
+      budgetFallbackModel: null,
+      safeMode: false,
+      autopilotActive: false,
+      providerCallLog: [],
+      dna: null,
     };
     if (process.env.ANTHROPIC_API_KEY) session.apiKeys.claude = process.env.ANTHROPIC_API_KEY;
     if (process.env.OPENAI_API_KEY)    session.apiKeys.openai = process.env.OPENAI_API_KEY;

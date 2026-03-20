@@ -4,300 +4,564 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>LocalCode — Local-first AI Coding Assistant</title>
-  <meta name="description" content="LocalCode v3.1.0 — a terminal AI coding assistant. Free with Ollama. Multi-provider. 30+ commands. Open source MIT. Built by TheAlxLabs, co-piloted by Nyx."/>
+  <meta name="description" content="LocalCode v4.0.0 — a terminal AI coding assistant. Free with Ollama. Multi-provider. 30+ commands. Open source MIT. Built by TheLocalCodeTeam, co-piloted by Nyx."/>
   <meta property="og:title" content="LocalCode — Local-first AI Coding Assistant"/>
   <meta property="og:description" content="Free with Ollama. Multi-provider. 30+ slash commands. Open source MIT."/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     :root{
-      --black:#080808;--yellow:#e8ff47;--white:#f0f0ee;
-      --gray:#444;--gray2:#1e1e1e;--gray3:#0f0f0f;--gray4:#141414;
-      --cyan:#47ffe8;--red:#ff4747;--green:#47ff8a;--purple:#a855f7;
-      --mono:'Space Mono',monospace;--sans:'Syne',sans-serif;
-      --glow-y:0 0 20px rgba(232,255,71,.25);
-      --glow-c:0 0 20px rgba(71,255,232,.25);
+      --bg:#000000;
+      --bg-card:#0a0a0a;
+      --bg-alt:#0f0f0f;
+      --text:#ededed;
+      --text-secondary:#a1a1a1;
+      --text-muted:#555;
+      --border-subtle:#1a1a1a;
+      --border:#222;
+      --white:#ffffff;
+      --font:'Inter',system-ui,-apple-system,sans-serif;
+      --mono:'Geist Mono','JetBrains Mono','Fira Code',monospace;
     }
-    html{scroll-behavior:smooth}
-    body{background:var(--black);color:var(--white);font-family:var(--mono);overflow-x:hidden;cursor:crosshair}
-    ::selection{background:var(--yellow);color:var(--black)}
+    html{scroll-behavior:smooth;color-scheme:dark}
+    body{
+      background:var(--bg);
+      color:var(--text);
+      font-family:var(--font);
+      overflow-x:hidden;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+    body::after{
+      content:'';
+      position:fixed;
+      inset:0;
+      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events:none;
+      z-index:9999;
+    }
+    ::selection{background:rgba(255,255,255,0.15);color:var(--white)}
 
-    /* scanlines */
-    body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.06) 2px,rgba(0,0,0,.06) 4px);pointer-events:none;z-index:9999}
+    /* NAV */
+    nav{
+      position:fixed;top:0;left:0;right:0;z-index:500;
+      display:flex;justify-content:space-between;align-items:center;
+      padding:0 2rem;height:60px;
+      border-bottom:1px solid var(--border-subtle);
+      background:rgba(0,0,0,0.85);
+      backdrop-filter:blur(20px);
+      -webkit-backdrop-filter:blur(20px);
+      transition:border-color .3s;
+    }
+    nav.scrolled{border-bottom-color:var(--border)}
+    .nav-logo{
+      font-family:var(--font);font-weight:700;font-size:.95rem;
+      color:var(--white);text-decoration:none;letter-spacing:-.03em;
+      display:flex;align-items:center;gap:.4rem;
+    }
+    .nav-logo-cat{color:var(--text-muted);font-family:var(--mono);font-size:.75rem;font-weight:400}
+    .nav-ver{font-size:.65rem;color:#333;letter-spacing:.04em;font-weight:400}
+    .nav-links{display:flex;gap:0;list-style:none;align-items:center}
+    .nav-links a{
+      color:var(--text-muted);text-decoration:none;
+      font-size:.8rem;font-weight:400;
+      padding:.4rem .9rem;
+      transition:color .15s;
+    }
+    .nav-links a:hover{color:var(--text)}
+    .nav-cta{
+      background:var(--white)!important;color:#000!important;
+      padding:.4rem 1rem!important;font-weight:600!important;
+      border-radius:6px;
+      transition:opacity .15s,box-shadow .15s!important;
+    }
+    .nav-cta:hover{opacity:.9;box-shadow:0 0 20px rgba(255,255,255,0.1)!important}
 
-    /* scanbeam */
-    .scanbeam{position:fixed;left:0;right:0;height:140px;background:linear-gradient(transparent,rgba(232,255,71,.018),transparent);pointer-events:none;z-index:9997;animation:scanbeam 12s linear infinite}
-    @keyframes scanbeam{from{top:-140px}to{top:100vh}}
-
-    /* ── NAV ── */
-    nav{position:fixed;top:0;left:0;right:0;z-index:500;display:flex;justify-content:space-between;align-items:center;padding:1rem 2.5rem;border-bottom:1px solid #111;background:rgba(8,8,8,.94);backdrop-filter:blur(16px);transition:border-color .3s}
-    nav.scrolled{border-bottom-color:var(--gray2)}
-    .nav-logo{font-family:var(--sans);font-weight:800;font-size:.95rem;color:var(--yellow);text-decoration:none;letter-spacing:-.02em;display:flex;align-items:center;gap:.5rem}
-    .nav-logo-cat{color:var(--white);font-family:var(--mono);font-size:.75rem}
-    .nav-links{display:flex;gap:1.8rem;list-style:none;align-items:center}
-    .nav-links a{color:#4a4a4a;text-decoration:none;font-size:.65rem;letter-spacing:.14em;text-transform:uppercase;transition:color .2s}
-    .nav-links a:hover{color:var(--yellow)}
-    .nav-cta{background:var(--yellow)!important;color:var(--black)!important;padding:.3rem 1rem;font-weight:700;transition:background .2s,transform .1s!important;letter-spacing:.08em!important}
-    .nav-cta:hover{background:#fff!important;transform:translateY(-1px)}
-    .nav-ver{font-size:.58rem;color:#2a2a2a;letter-spacing:.1em;margin-left:-.5rem}
-
-    /* ── HERO ── */
-    #hero{min-height:100vh;display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:7rem 2.5rem 4rem;gap:4rem;position:relative;overflow:hidden;max-width:1400px;margin:0 auto}
-    .hero-grid{position:fixed;inset:0;background-image:linear-gradient(rgba(232,255,71,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(232,255,71,.018) 1px,transparent 1px);background-size:60px 60px;mask-image:radial-gradient(ellipse 70% 70% at 50% 40%,black 10%,transparent 70%);pointer-events:none;z-index:0}
+    /* HERO */
+    #hero{
+      min-height:100vh;
+      display:grid;grid-template-columns:1fr 1fr;
+      align-items:center;
+      padding:7rem 2.5rem 4rem;
+      gap:5rem;
+      position:relative;
+      overflow:hidden;
+      max-width:1200px;margin:0 auto;
+    }
+    .hero-bg{
+      position:fixed;inset:0;
+      background-image:radial-gradient(circle,#222 1px,transparent 1px);
+      background-size:32px 32px;
+      opacity:.4;
+      pointer-events:none;z-index:0;
+    }
+    .hero-glow{
+      position:fixed;inset:0;
+      background:radial-gradient(ellipse 60% 40% at 50% 50%,rgba(255,255,255,0.04) 0%,transparent 60%);
+      pointer-events:none;z-index:0;
+    }
     .hero-left{position:relative;z-index:1}
-    .hero-tag{display:inline-flex;align-items:center;gap:.5rem;font-size:.62rem;letter-spacing:.16em;text-transform:uppercase;color:var(--yellow);border:1px solid rgba(232,255,71,.22);padding:.28rem .8rem;margin-bottom:1.5rem;opacity:0;transform:translateY(8px);animation:fadeUp .5s .1s forwards}
-    .hero-tag-dot{width:5px;height:5px;background:var(--green);border-radius:50%;animation:pulse 2s ease-in-out infinite}
-    @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.7)}}
-    h1{font-family:var(--sans);font-size:clamp(2.8rem,5.2vw,5rem);font-weight:800;line-height:.93;letter-spacing:-.035em;margin-bottom:1.4rem;opacity:0;transform:translateY(16px);animation:fadeUp .6s .22s forwards}
-    h1 .acc{color:var(--yellow)}
-    h1 .dim{color:#1e1e1e}
-    h1 .acc2{color:var(--cyan)}
-    .hero-desc{font-size:.82rem;line-height:2;color:#555;max-width:420px;margin-bottom:2.2rem;opacity:0;transform:translateY(16px);animation:fadeUp .6s .34s forwards}
-    .hero-desc strong{color:var(--white)}
-    .hero-actions{display:flex;gap:.9rem;flex-wrap:wrap;opacity:0;transform:translateY(16px);animation:fadeUp .6s .44s forwards;margin-bottom:2.8rem}
-    .hero-stats{display:flex;gap:2.5rem;opacity:0;animation:fadeUp .6s .58s forwards;padding-top:2rem;border-top:1px solid #141414}
-    .hero-stat .num{font-family:var(--sans);font-size:1.8rem;font-weight:800;color:var(--yellow);line-height:1}
-    .hero-stat .lbl{font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;color:#333;margin-top:.2rem}
+    .hero-badge{
+      display:inline-flex;align-items:center;gap:.5rem;
+      font-size:.7rem;font-weight:500;letter-spacing:.04em;
+      color:var(--text-muted);
+      border:1px solid var(--border-subtle);
+      padding:.3rem .85rem;border-radius:100px;
+      margin-bottom:1.8rem;
+      opacity:0;transform:translateY(8px);
+      animation:fadeUp .5s .1s forwards;
+    }
+    .hero-badge-dot{width:5px;height:5px;background:#3d3d3d;border-radius:50%}
+    h1{
+      font-family:var(--font);
+      font-size:clamp(3rem,6vw,5.5rem);
+      font-weight:900;
+      line-height:.95;
+      letter-spacing:-.04em;
+      color:var(--white);
+      margin-bottom:1.4rem;
+      opacity:0;transform:translateY(16px);
+      animation:fadeUp .6s .2s forwards;
+    }
+    .hero-desc{
+      font-size:1rem;line-height:1.7;
+      color:var(--text-secondary);
+      max-width:520px;
+      margin-bottom:2.2rem;
+      font-weight:400;
+      opacity:0;transform:translateY(16px);
+      animation:fadeUp .6s .32s forwards;
+    }
+    .hero-actions{
+      display:flex;gap:.75rem;flex-wrap:wrap;
+      opacity:0;transform:translateY(16px);
+      animation:fadeUp .6s .42s forwards;
+      margin-bottom:3rem;
+    }
+    .hero-stats{
+      display:flex;gap:2.5rem;
+      opacity:0;animation:fadeUp .6s .54s forwards;
+      padding-top:2rem;border-top:1px solid var(--border-subtle);
+    }
+    .hero-stat .num{
+      font-family:var(--font);font-size:1.5rem;font-weight:700;
+      color:var(--white);line-height:1;letter-spacing:-.03em;
+    }
+    .hero-stat .lbl{font-size:.75rem;color:var(--text-muted);margin-top:.3rem;font-weight:400}
 
-    /* buttons */
-    .btn-p{background:var(--yellow);color:var(--black);font-family:var(--mono);font-size:.78rem;font-weight:700;padding:.7rem 1.5rem;border:none;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:.5rem;transition:transform .12s,box-shadow .2s}
-    .btn-p:hover{transform:translate(-2px,-2px);box-shadow:4px 4px 0 rgba(232,255,71,.35)}
-    .btn-s{background:transparent;color:var(--white);font-family:var(--mono);font-size:.78rem;padding:.7rem 1.5rem;border:1px solid #222;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:.5rem;transition:border-color .2s,color .2s,transform .12s}
-    .btn-s:hover{border-color:var(--yellow);color:var(--yellow);transform:translate(-2px,-2px)}
+    /* BUTTONS */
+    .btn-p{
+      background:var(--white);color:#000;
+      font-family:var(--font);font-size:.875rem;font-weight:600;
+      padding:.65rem 1.35rem;border:none;border-radius:6px;
+      cursor:pointer;text-decoration:none;
+      display:inline-flex;align-items:center;gap:.4rem;
+      transition:opacity .15s,box-shadow .15s,transform .1s;
+    }
+    .btn-p:hover{opacity:.92;box-shadow:0 0 30px rgba(255,255,255,0.08);transform:translateY(-1px)}
+    .btn-s{
+      background:transparent;color:var(--text);
+      font-family:var(--font);font-size:.875rem;font-weight:500;
+      padding:.65rem 1.35rem;border:1px solid #333;border-radius:6px;
+      cursor:pointer;text-decoration:none;
+      display:inline-flex;align-items:center;gap:.4rem;
+      transition:border-color .15s,color .15s,transform .1s;
+    }
+    .btn-s:hover{border-color:#555;color:var(--white);transform:translateY(-1px)}
 
-    /* ── HERO TERMINAL ── */
-    .hero-right{position:relative;z-index:1;opacity:0;transform:translateX(20px);animation:fadeLeft .7s .48s forwards}
-    .terminal{background:#060606;border:1px solid #161616;position:relative;box-shadow:0 0 0 1px rgba(232,255,71,.04),0 40px 80px rgba(0,0,0,.95)}
-    .terminal::before{content:'';position:absolute;inset:-1px;background:linear-gradient(135deg,rgba(232,255,71,.1),transparent 40%,rgba(71,255,232,.04) 100%);pointer-events:none;z-index:0}
-    .tbar{background:#0d0d0d;padding:.5rem .9rem;display:flex;align-items:center;gap:.4rem;border-bottom:1px solid #161616;position:relative;z-index:1}
-    .tdot{width:8px;height:8px;border-radius:50%}
-    .tdot:nth-child(1){background:#ff5f57}.tdot:nth-child(2){background:#febc2e}.tdot:nth-child(3){background:#28c840}
-    .ttitle{margin-left:auto;margin-right:auto;font-size:.6rem;color:#2e2e2e;letter-spacing:.06em}
-    .tbody{padding:1rem 1.2rem;position:relative;z-index:1;font-size:.72rem;line-height:1.8;min-height:340px;max-height:340px;overflow:hidden}
+    /* HERO TERMINAL */
+    .hero-right{
+      position:relative;z-index:1;
+      opacity:0;transform:translateX(20px);
+      animation:fadeLeft .7s .45s forwards;
+    }
+    .terminal{
+      background:#000;
+      border:1px solid var(--border-subtle);
+      border-radius:8px;
+      overflow:hidden;
+    }
+    .tbar{
+      background:#0a0a0a;
+      padding:.65rem 1rem;
+      display:flex;align-items:center;gap:.45rem;
+      border-bottom:1px solid var(--border-subtle);
+    }
+    .tdot{width:12px;height:12px;border-radius:50%}
+    .tdot:nth-child(1){background:#ff5f57}
+    .tdot:nth-child(2){background:#febc2e}
+    .tdot:nth-child(3){background:#28c840}
+    .ttitle{
+      margin-left:auto;margin-right:auto;
+      font-family:var(--mono);font-size:.65rem;
+      color:#333;letter-spacing:.04em;
+    }
+    .tbody{
+      padding:1rem 1.2rem;
+      font-family:var(--mono);font-size:.72rem;
+      line-height:1.85;min-height:340px;max-height:340px;
+      overflow:hidden;
+    }
     .trow{display:flex;gap:.5rem;min-height:1.3em;flex-wrap:wrap}
-    .tnyx-header{display:flex;gap:1rem;margin-bottom:.6rem;padding-bottom:.6rem;border-bottom:1px solid #131313}
-    .tnyx-art{white-space:pre;line-height:1.3;color:var(--yellow);font-size:.78rem;flex-shrink:0}
+    .tnyx-header{
+      display:flex;gap:1rem;margin-bottom:.7rem;
+      padding-bottom:.7rem;border-bottom:1px solid var(--border-subtle);
+    }
+    .tnyx-art{white-space:pre;line-height:1.3;color:var(--text-secondary);font-size:.8rem;flex-shrink:0}
     .tnyx-info{display:flex;flex-direction:column;justify-content:center;gap:.05rem;font-size:.68rem}
-    .ty{color:var(--yellow)}.tc{color:var(--cyan)}.tg{color:#2e2e2e}.tw{color:var(--white)}.tr{color:var(--red)}.tgr{color:var(--green)}.tpu{color:var(--purple)}
-    .cursor{display:inline-block;width:6px;height:.85em;background:var(--yellow);vertical-align:text-bottom;animation:blink 1s step-end infinite}
+    .tw{color:var(--text)}.tg{color:#444}.tl{color:#888}.td{color:var(--text-muted)}
+    .cursor{
+      display:inline-block;width:6px;height:.85em;
+      background:var(--text);vertical-align:text-bottom;
+      animation:blink 1s step-end infinite;
+    }
     @keyframes blink{50%{opacity:0}}
-    .tperm{background:rgba(232,255,71,.03);border-left:2px solid var(--yellow);padding:.4rem .7rem;margin:.35rem 0;font-size:.68rem}
-    .tdiff{background:#0a0a0a;border:1px solid #181818;padding:.45rem .75rem;margin:.25rem 0;font-size:.66rem}
-    .tdiff-hdr{color:#333;margin-bottom:.25rem;font-size:.6rem}
-    .tdiff-add{color:var(--green)}.tdiff-del{color:var(--red)}.tdiff-ctx{color:#2a2a2a}
-    .tinfo-block{background:#0a0a0a;border:1px solid #181818;padding:.4rem .7rem;margin:.25rem 0;font-size:.66rem;color:#444}
-    .replay-btn{position:absolute;bottom:.7rem;right:.7rem;background:transparent;border:1px solid #222;color:#333;font-family:var(--mono);font-size:.58rem;padding:.22rem .55rem;cursor:pointer;transition:all .2s;z-index:2}
-    .replay-btn:hover{border-color:var(--yellow);color:var(--yellow)}
+    .replay-btn{
+      position:absolute;bottom:.7rem;right:.7rem;
+      background:transparent;border:1px solid var(--border);
+      color:var(--text-muted);font-family:var(--mono);font-size:.6rem;
+      padding:.25rem .6rem;border-radius:4px;
+      cursor:pointer;transition:all .15s;z-index:2;
+    }
+    .replay-btn:hover{border-color:#555;color:var(--text)}
 
-    /* ── TICKER ── */
-    .ticker-wrap{overflow:hidden;border-top:1px solid #0f0f0f;border-bottom:1px solid #0f0f0f;padding:.5rem 0;background:rgba(232,255,71,.008)}
-    .ticker{display:flex;gap:3rem;width:max-content;animation:ticker 28s linear infinite}
+    /* TICKER */
+    .ticker-wrap{
+      overflow:hidden;
+      border-top:1px solid var(--border-subtle);
+      border-bottom:1px solid var(--border-subtle);
+      padding:.6rem 0;
+    }
+    .ticker{display:flex;gap:3.5rem;width:max-content;animation:ticker 30s linear infinite}
     .ticker:hover{animation-play-state:paused}
-    .ticker-item{white-space:nowrap;font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;color:#252525;display:flex;align-items:center;gap:.6rem}
-    .ticker-item::before{content:'◈';color:var(--yellow);opacity:.5}
+    .ticker-item{
+      white-space:nowrap;font-size:.72rem;font-weight:400;
+      letter-spacing:.04em;color:#2a2a2a;
+      display:flex;align-items:center;gap:.6rem;
+    }
+    .ticker-item::before{content:'·';color:#333}
     @keyframes ticker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 
-    /* ── SECTION BASE ── */
+    /* SECTION BASE */
     .section-wrap{padding:6rem 2.5rem;max-width:1200px;margin:0 auto}
-    .section-label{font-size:.6rem;letter-spacing:.22em;text-transform:uppercase;color:var(--yellow);margin-bottom:.6rem;display:flex;align-items:center;gap:.5rem}
-    .section-label::before{content:'//';color:#252525}
-    h2{font-family:var(--sans);font-size:clamp(1.9rem,3.8vw,2.9rem);font-weight:800;letter-spacing:-.025em;line-height:1.05;margin-bottom:.7rem}
-    .section-sub{color:#444;font-size:.8rem;line-height:1.9;max-width:500px;margin-bottom:3rem}
+    .section-label{
+      font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;
+      color:var(--text-muted);margin-bottom:.7rem;font-weight:500;
+    }
+    h2{
+      font-family:var(--font);
+      font-size:clamp(1.75rem,3.5vw,2.75rem);
+      font-weight:800;letter-spacing:-.035em;line-height:1.1;
+      color:var(--white);margin-bottom:.75rem;
+    }
+    .section-sub{
+      color:var(--text-muted);font-size:.9rem;line-height:1.75;
+      max-width:520px;margin-bottom:3rem;font-weight:400;
+    }
 
-    /* ── REVEAL ── */
+    /* REVEAL */
     .reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease,transform .6s ease}
     .reveal.vis{opacity:1;transform:none}
 
-    /* ── QUICK START ── */
-    #quickstart{background:var(--gray3);border-top:1px solid #111;border-bottom:1px solid #111}
-    .qs-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--gray2);margin-top:2.5rem}
-    .qs-step{padding:1.8rem 1.4rem;border-right:1px solid var(--gray2);position:relative;overflow:hidden;transition:background .25s;cursor:default}
+    /* QUICK START */
+    #quickstart{background:var(--bg-alt);border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
+    .qs-grid{
+      display:grid;grid-template-columns:repeat(4,1fr);
+      gap:0;border:1px solid var(--border-subtle);
+      border-radius:8px;overflow:hidden;margin-top:2.5rem;
+    }
+    .qs-step{
+      padding:1.8rem 1.5rem;border-right:1px solid var(--border-subtle);
+      position:relative;overflow:hidden;
+      transition:background .2s;cursor:default;
+      background:var(--bg-card);
+    }
     .qs-step:last-child{border-right:none}
-    .qs-step:hover{background:rgba(232,255,71,.018)}
-    .qs-num{font-family:var(--sans);font-size:2.8rem;font-weight:800;color:#111;line-height:1;margin-bottom:.7rem;transition:color .3s}
-    .qs-step:hover .qs-num{color:rgba(232,255,71,.1)}
-    .qs-step h3{font-family:var(--sans);font-size:.9rem;font-weight:700;margin-bottom:.35rem;color:var(--white)}
-    .qs-step p{font-size:.7rem;line-height:1.85;color:#3a3a3a}
-    .qs-step code{color:var(--yellow);font-family:var(--mono)}
-    .qs-step::after{content:attr(data-n);position:absolute;top:.7rem;right:.9rem;font-size:.56rem;letter-spacing:.1em;color:#181818}
-    .qs-connector{color:var(--yellow);position:absolute;right:-1px;top:50%;transform:translateY(-50%);font-size:.8rem;color:#1e1e1e;z-index:1}
+    .qs-step:hover{background:#0e0e0e}
+    .qs-num{
+      font-family:var(--font);font-size:2.5rem;font-weight:800;
+      color:#1a1a1a;line-height:1;margin-bottom:.8rem;
+      letter-spacing:-.04em;
+    }
+    .qs-step h3{font-size:.9rem;font-weight:600;margin-bottom:.4rem;color:var(--white)}
+    .qs-step p{font-size:.8rem;line-height:1.75;color:var(--text-muted);font-weight:400}
+    .qs-step code{color:var(--text-secondary);font-family:var(--mono);font-size:.78rem}
 
-    /* ── FEATURES ── */
-    .features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--gray2)}
-    .feature{padding:1.8rem;border-right:1px solid var(--gray2);border-bottom:1px solid var(--gray2);position:relative;overflow:hidden;transition:background .25s}
+    /* FEATURES */
+    .features-grid{
+      display:grid;grid-template-columns:repeat(3,1fr);
+      gap:0;border:1px solid var(--border-subtle);
+      border-radius:8px;overflow:hidden;
+    }
+    .feature{
+      padding:1.8rem;border-right:1px solid var(--border-subtle);
+      border-bottom:1px solid var(--border-subtle);
+      position:relative;overflow:hidden;
+      transition:background .2s;
+      background:var(--bg-card);
+    }
     .feature:nth-child(3n){border-right:none}
     .feature:nth-last-child(-n+3){border-bottom:none}
-    .feature::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--yellow),transparent);transform:scaleX(0);transform-origin:left;transition:transform .4s}
-    .feature:hover{background:rgba(232,255,71,.015)}
-    .feature:hover::before{transform:scaleX(1)}
-    .feature-icon{font-size:1.2rem;margin-bottom:.7rem;display:block;opacity:.7}
-    .feature h3{font-family:var(--sans);font-size:.9rem;font-weight:700;margin-bottom:.4rem}
-    .feature p{font-size:.7rem;line-height:1.9;color:#404040}
-    .feature p code{color:var(--yellow);font-family:var(--mono)}
-    .ftag{display:inline-block;font-size:.56rem;letter-spacing:.1em;text-transform:uppercase;color:var(--yellow);border:1px solid rgba(232,255,71,.16);padding:.08rem .38rem;margin-top:.65rem}
-    .feature-new::after{content:'NEW';position:absolute;top:.9rem;right:.9rem;font-size:.5rem;letter-spacing:.14em;color:var(--cyan);border:1px solid rgba(71,255,232,.2);padding:.06rem .3rem}
-
-    /* ── PROVIDER STRIP ── */
-    #providers{background:var(--gray3);border-top:1px solid #111;border-bottom:1px solid #111}
-    .providers-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--gray2);border:1px solid var(--gray2);margin-top:2.5rem}
-    .pcard{background:var(--black);padding:1.8rem 1.4rem;display:flex;flex-direction:column;gap:.4rem;transition:background .2s;position:relative;overflow:hidden}
-    .pcard::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;transform:scaleX(0);transition:transform .3s}
-    .pcard:nth-child(1)::after{background:#777}
-    .pcard:nth-child(2)::after{background:#e8760a}
-    .pcard:nth-child(3)::after{background:var(--green)}
-    .pcard:nth-child(4)::after{background:var(--red)}
-    .pcard:hover{background:rgba(255,255,255,.015)}
-    .pcard:hover::after{transform:scaleX(1)}
-    .pcard-provider-icon{font-size:1.6rem;margin-bottom:.3rem;line-height:1}
-    .pname{font-family:var(--sans);font-size:1rem;font-weight:700}
-    .pmodels{font-size:.65rem;color:#383838;line-height:1.7}
-    .pbadge{display:inline-block;font-size:.56rem;letter-spacing:.08em;padding:.1rem .4rem;margin-top:.15rem;align-self:flex-start}
-    .b-free{background:rgba(71,255,138,.06);color:var(--green);border:1px solid rgba(71,255,138,.15)}
-    .b-key{background:rgba(232,255,71,.06);color:var(--yellow);border:1px solid rgba(232,255,71,.15)}
-    .pcard-setup{font-size:.62rem;color:#252525;margin-top:.35rem;font-family:var(--mono)}
-    .pcard-highlight{background:rgba(71,255,138,.02)}
-    .pcard-highlight .pname{color:var(--green)}
-    .free-tag{display:inline-flex;align-items:center;gap:.3rem;font-size:.58rem;color:var(--green);margin-top:.2rem}
-    .free-tag::before{content:'★'}
-
-    /* ── COMMAND SHOWCASE ── */
-    #commands{background:var(--black)}
-    .cmd-tabs{display:flex;gap:0;border:1px solid var(--gray2);margin-top:2.5rem;overflow-x:auto}
-    .cmd-tab{padding:.7rem 1.4rem;font-family:var(--mono);font-size:.65rem;color:#333;cursor:pointer;border-right:1px solid var(--gray2);transition:all .2s;white-space:nowrap;background:transparent;border-top:none;border-bottom:none;border-left:none;letter-spacing:.06em}
-    .cmd-tab:last-child{border-right:none}
-    .cmd-tab:hover{color:var(--yellow);background:rgba(232,255,71,.018)}
-    .cmd-tab.active{color:var(--yellow);background:rgba(232,255,71,.04);border-bottom:none}
-    .cmd-panels{border:1px solid var(--gray2);border-top:none}
-    .cmd-panel{display:none;grid-template-columns:1fr 1fr;gap:0}
-    .cmd-panel.active{display:grid}
-    .cmd-list{border-right:1px solid var(--gray2)}
-    .cmd-row{padding:.8rem 1.1rem;display:grid;grid-template-columns:120px 1fr auto;gap:.8rem;align-items:center;transition:background .2s;cursor:default;border-bottom:1px solid #0d0d0d}
-    .cmd-row:last-child{border-bottom:none}
-    .cmd-row:hover{background:rgba(232,255,71,.02)}
-    .cmd-trigger{color:var(--cyan);font-size:.72rem;font-family:var(--mono)}
-    .cmd-desc{font-size:.68rem;color:#444;line-height:1.5}
-    .cmd-cat{font-size:.55rem;letter-spacing:.08em;text-transform:uppercase;color:#222;white-space:nowrap}
-    .cmd-row:hover .cmd-cat{color:#3a3a3a}
-    .cmd-demo-pane{padding:1.4rem;background:var(--gray3);display:flex;flex-direction:column;gap:.8rem}
-    .cmd-demo-title{font-family:var(--sans);font-size:.85rem;font-weight:700;color:var(--yellow)}
-    .cmd-demo-desc{font-size:.7rem;color:#444;line-height:1.85}
-    .cmd-demo-term{background:#060606;border:1px solid #1a1a1a;padding:.8rem 1rem;font-size:.68rem;line-height:1.8}
-
-    /* full command grid */
-    .cmd-all-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--gray2);border:1px solid var(--gray2);margin-top:1rem}
-    .cmd-all-row{background:var(--black);padding:.7rem 1rem;display:grid;grid-template-columns:110px 1fr auto;gap:.8rem;align-items:center;transition:background .15s}
-    .cmd-all-row:hover{background:rgba(232,255,71,.02)}
-
-    /* ── NYX ── */
-    #nyx{background:var(--gray3);border-top:1px solid #111;border-bottom:1px solid #111}
-    #nyx .inner{max-width:1200px;margin:0 auto;padding:6rem 2.5rem;display:grid;grid-template-columns:260px 1fr;gap:5rem;align-items:center}
-    .nyx-stage{display:flex;flex-direction:column;align-items:center;gap:1.5rem}
-    .nyx-big{font-family:var(--mono);white-space:pre;line-height:1.3;font-size:clamp(.9rem,2.2vw,1.6rem);color:var(--yellow);animation:float 3.8s ease-in-out infinite;text-align:center}
-    @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
-    .mood-pills{display:flex;gap:.4rem;flex-wrap:wrap;justify-content:center}
-    .mpill{background:transparent;border:1px solid #1a1a1a;color:#333;font-family:var(--mono);font-size:.6rem;padding:.28rem .65rem;cursor:pointer;transition:all .2s;letter-spacing:.08em}
-    .mpill:hover,.mpill.active{border-color:var(--yellow);color:var(--yellow);background:rgba(232,255,71,.04)}
-    .nyx-desc h3{font-family:var(--sans);font-size:2rem;font-weight:800;margin-bottom:.7rem}
-    .nyx-desc p{color:#484848;font-size:.78rem;line-height:2;max-width:500px;margin-bottom:.7rem}
-    .nyx-facts{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--gray2);border:1px solid var(--gray2);margin-top:1.8rem}
-    .nfact{background:var(--black);padding:.9rem 1.1rem}
-    .nfact .nl{font-size:.56rem;letter-spacing:.14em;text-transform:uppercase;color:var(--yellow);margin-bottom:.2rem}
-    .nfact .nv{font-size:.76rem;color:var(--white)}
-    .coauthor-badge{display:inline-flex;align-items:center;gap:.5rem;background:rgba(232,255,71,.05);border:1px solid rgba(232,255,71,.18);padding:.32rem .75rem;margin-top:.9rem;font-size:.68rem;color:var(--yellow);font-family:var(--mono)}
-    .coauthor-badge::before{content:'⎇';margin-right:.1rem}
-
-    /* ── WHY LOCALCODE (vs section) ── */
-    #why{background:var(--black)}
-    .vs-table{border:1px solid var(--gray2);margin-top:2.5rem;overflow:hidden}
-    .vs-header{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:0;background:var(--gray3);border-bottom:1px solid var(--gray2)}
-    .vs-col-header{padding:.75rem 1.1rem;font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;color:#3a3a3a;border-right:1px solid var(--gray2)}
-    .vs-col-header:last-child{border-right:none}
-    .vs-col-header.lc{color:var(--yellow)}
-    .vs-row{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:0;border-bottom:1px solid #0d0d0d;transition:background .15s}
-    .vs-row:last-child{border-bottom:none}
-    .vs-row:hover{background:rgba(232,255,71,.012)}
-    .vs-cell{padding:.75rem 1.1rem;font-size:.7rem;color:#444;border-right:1px solid #0d0d0d;display:flex;align-items:center;gap:.4rem}
-    .vs-cell:last-child{border-right:none}
-    .vs-cell.feature-name{color:var(--white);font-size:.72rem}
-    .vs-cell.yes{color:var(--green)}
-    .vs-cell.no{color:#2a2a2a}
-    .vs-cell.partial{color:var(--yellow)}
-    .vs-cell.lc-cell{background:rgba(232,255,71,.02)}
-
-    /* ── INSTALL ── */
-    #install{text-align:center;padding:7rem 2.5rem;background:var(--gray3);border-top:1px solid #111}
-    #install .inner{max-width:700px;margin:0 auto}
-    .install-methods{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--gray2);border:1px solid var(--gray2);margin:2.2rem auto;text-align:left}
-    .imethod{background:var(--black);padding:1.4rem 1.6rem}
-    .imethod-label{font-size:.58rem;letter-spacing:.14em;text-transform:uppercase;color:#333;margin-bottom:.8rem}
-    .ibox{background:var(--gray3);border:1px solid #1a1a1a;padding:.65rem 1.1rem;display:flex;align-items:center;gap:.9rem;margin-bottom:.6rem}
-    .ibox::before{content:'$';color:var(--yellow);flex-shrink:0;font-size:.82rem}
-    .icmd{flex:1;font-size:.82rem;color:var(--white)}
-    .cpbtn{background:transparent;border:1px solid #252525;color:#3a3a3a;font-family:var(--mono);font-size:.6rem;padding:.24rem .55rem;cursor:pointer;transition:all .2s;flex-shrink:0}
-    .cpbtn:hover{border-color:var(--yellow);color:var(--yellow)}
-    .cpbtn.ok{border-color:var(--green);color:var(--green)}
-    .imethod-note{font-size:.66rem;color:#292929;line-height:1.7}
-    .req-row{display:flex;justify-content:center;gap:2rem;margin-top:2rem;flex-wrap:wrap}
-    .req-item{font-size:.66rem;color:#282828;display:flex;align-items:center;gap:.4rem}
-    .req-item::before{content:'◎';color:var(--yellow);opacity:.5}
-    .install-run{margin-top:2rem}
-    .install-run-label{font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;color:#222;margin-bottom:.7rem}
-
-    /* ── FOOTER ── */
-    footer{border-top:1px solid #111;padding:1.6rem 2.5rem;display:flex;justify-content:space-between;align-items:center;font-size:.65rem;color:#222;flex-wrap:wrap;gap:1rem}
-    footer a{color:#2e2e2e;text-decoration:none;transition:color .2s}
-    footer a:hover{color:var(--yellow)}
-    .footer-links{display:flex;gap:1.8rem;align-items:center}
-    .mit-badge{display:inline-flex;align-items:center;gap:.3rem;border:1px solid #1a1a1a;padding:.15rem .5rem;font-size:.58rem;color:#2a2a2a;transition:all .2s}
-    .mit-badge:hover{border-color:var(--yellow);color:var(--yellow)}
-
-    /* ── BRACKET CORNERS ── */
-    .bc{position:relative}
-    .bc::before,.bc::after{content:'';position:absolute;width:10px;height:10px}
-    .bc::before{top:-5px;left:-5px;border-top:2px solid rgba(232,255,71,.4);border-left:2px solid rgba(232,255,71,.4)}
-    .bc::after{bottom:-5px;right:-5px;border-bottom:2px solid rgba(232,255,71,.4);border-right:2px solid rgba(232,255,71,.4)}
-
-    /* ── ANIMATIONS ── */
-    @keyframes fadeUp{to{opacity:1;transform:none}}
-    @keyframes fadeLeft{to{opacity:1;transform:none}}
-    @keyframes glitch{
-      0%{clip-path:inset(0 0 95% 0);transform:translate(-2px,0)}
-      15%{clip-path:inset(40% 0 45% 0);transform:translate(2px,0)}
-      30%{clip-path:inset(75% 0 8% 0);transform:translate(-1px,0)}
-      45%{clip-path:inset(15% 0 75% 0);transform:translate(1px,0)}
-      60%{clip-path:none;transform:translate(0,0)}
-      100%{clip-path:none;transform:translate(0,0)}
+    .feature:hover{background:#0e0e0e}
+    .feature-icon{font-size:1.1rem;margin-bottom:.8rem;display:block;color:var(--text)}
+    .feature h3{font-size:.9rem;font-weight:600;margin-bottom:.4rem;color:var(--white)}
+    .feature p{font-size:.8rem;line-height:1.75;color:var(--text-muted)}
+    .feature p code{color:var(--text-secondary);font-family:var(--mono);font-size:.78rem}
+    .ftag{
+      display:inline-block;font-size:.65rem;font-weight:500;letter-spacing:.06em;
+      text-transform:uppercase;color:var(--text-muted);
+      border:1px solid var(--border-subtle);
+      padding:.15rem .5rem;border-radius:4px;margin-top:.7rem;
+    }
+    .feature-new-badge{
+      position:absolute;top:.85rem;right:.85rem;
+      font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;
+      color:#444;border:1px solid var(--border-subtle);
+      padding:.08rem .38rem;border-radius:4px;
     }
 
-    /* ── GLOW BADGES ── */
-    .glow-yellow{box-shadow:var(--glow-y)}
-    .glow-cyan{box-shadow:var(--glow-c)}
+    /* PROVIDERS */
+    #providers{background:var(--bg-alt);border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
+    .providers-grid{
+      display:grid;grid-template-columns:repeat(4,1fr);
+      gap:0;border:1px solid var(--border-subtle);
+      border-radius:8px;overflow:hidden;margin-top:2.5rem;
+    }
+    .pcard{
+      background:var(--bg-card);padding:1.8rem 1.5rem;
+      display:flex;flex-direction:column;gap:.5rem;
+      transition:background .2s;position:relative;overflow:hidden;
+      border-right:1px solid var(--border-subtle);
+    }
+    .pcard:last-child{border-right:none}
+    .pcard:hover{background:#0e0e0e}
+    .pcard-icon{font-size:1.4rem;margin-bottom:.2rem;line-height:1;color:var(--text)}
+    .pname{font-size:1rem;font-weight:700;color:var(--white);letter-spacing:-.02em}
+    .pmodels{font-size:.75rem;color:var(--text-muted);line-height:1.75;font-weight:400}
+    .pbadge{
+      display:inline-block;font-size:.65rem;font-weight:500;
+      letter-spacing:.04em;padding:.15rem .55rem;border-radius:4px;
+      margin-top:.1rem;align-self:flex-start;
+      border:1px solid var(--border-subtle);color:var(--text-muted);
+    }
+    .pcard-setup{font-size:.7rem;color:#333;margin-top:.2rem;font-family:var(--mono)}
 
-    /* ── PLUGIN SECTION ── */
-    #plugins{background:var(--gray3);border-top:1px solid #111;border-bottom:1px solid #111}
+    /* COMMANDS */
+    #commands{background:var(--bg)}
+    .cmd-tabs{
+      display:flex;gap:0;
+      border-bottom:1px solid #333;
+      margin-top:2.5rem;overflow-x:auto;
+    }
+    .cmd-tab{
+      padding:.65rem 1.1rem;font-family:var(--font);font-size:.8rem;font-weight:400;
+      color:var(--text-muted);cursor:pointer;
+      border:none;border-bottom:2px solid transparent;
+      background:transparent;white-space:nowrap;
+      transition:color .15s,border-color .15s;
+      margin-bottom:-1px;
+    }
+    .cmd-tab:hover{color:var(--text)}
+    .cmd-tab.active{color:var(--white);font-weight:500;border-bottom-color:var(--white)}
+    .cmd-panels{border:1px solid var(--border-subtle);border-top:none;border-radius:0 0 8px 8px;overflow:hidden}
+    .cmd-panel{display:none;grid-template-columns:1fr 1fr;gap:0}
+    .cmd-panel.active{display:grid}
+    .cmd-list{border-right:1px solid var(--border-subtle)}
+    .cmd-row{
+      padding:.8rem 1.1rem;
+      display:grid;grid-template-columns:130px 1fr auto;
+      gap:.8rem;align-items:center;
+      transition:background .15s;cursor:default;
+      border-bottom:1px solid #0d0d0d;
+    }
+    .cmd-row:last-child{border-bottom:none}
+    .cmd-row:hover{background:rgba(255,255,255,0.02)}
+    .cmd-trigger{color:var(--text);font-size:.78rem;font-family:var(--mono);font-weight:500}
+    .cmd-desc{font-size:.78rem;color:var(--text-muted);line-height:1.5;font-weight:400}
+    .cmd-cat{font-size:.65rem;letter-spacing:.06em;text-transform:uppercase;color:#2a2a2a;white-space:nowrap;font-weight:500}
+    .cmd-row:hover .cmd-cat{color:#3a3a3a}
+    .cmd-demo-pane{padding:1.5rem;background:var(--bg-card);display:flex;flex-direction:column;gap:.9rem}
+    .cmd-demo-title{font-size:.875rem;font-weight:600;color:var(--white)}
+    .cmd-demo-desc{font-size:.8rem;color:var(--text-muted);line-height:1.75;font-weight:400}
+    .cmd-demo-term{
+      background:var(--bg);border:1px solid var(--border-subtle);
+      padding:.85rem 1rem;border-radius:6px;
+      font-family:var(--mono);font-size:.72rem;line-height:1.8;
+    }
+    .cmd-all-grid{
+      display:grid;grid-template-columns:1fr 1fr;
+      gap:1px;background:var(--border-subtle);
+      border:1px solid var(--border-subtle);
+      border-radius:6px;overflow:hidden;
+      margin-top:1rem;
+    }
+    .cmd-all-row{
+      background:var(--bg);padding:.7rem 1rem;
+      display:grid;grid-template-columns:120px 1fr auto;
+      gap:.8rem;align-items:center;transition:background .15s;
+    }
+    .cmd-all-row:hover{background:rgba(255,255,255,0.02)}
+
+    /* PLUGIN SECTION */
+    #plugins{background:var(--bg-alt);border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
     .plugin-grid{display:grid;grid-template-columns:1fr 1fr;gap:4rem;align-items:center;margin-top:2.5rem}
-    .plugin-code{background:#060606;border:1px solid #1a1a1a;padding:1.2rem 1.4rem;font-size:.7rem;line-height:1.9;position:relative}
-    .plugin-code::before{content:'plugin.js';position:absolute;top:.5rem;right:.8rem;font-size:.56rem;color:#252525;letter-spacing:.08em}
-    .plugin-code .kw{color:var(--cyan)}.plugin-code .str{color:var(--green)}.plugin-code .fn{color:var(--yellow)}.plugin-code .cm{color:#2a2a2a}
-    .plugin-features{display:flex;flex-direction:column;gap:.9rem}
+    .plugin-code{
+      background:var(--bg-card);border:1px solid var(--border-subtle);
+      padding:1.4rem;border-radius:8px;
+      font-family:var(--mono);font-size:.75rem;line-height:1.9;
+      position:relative;
+    }
+    .plugin-code::before{
+      content:'plugin.js';position:absolute;top:.6rem;right:.9rem;
+      font-size:.65rem;color:#333;letter-spacing:.04em;
+      font-family:var(--mono);
+    }
+    .pk{color:var(--text-secondary)}.ps{color:var(--text)}.pf{color:var(--text)}.pc{color:#444}
+    .plugin-features{display:flex;flex-direction:column;gap:1rem}
     .plugin-feat{display:flex;gap:.9rem;align-items:flex-start}
-    .plugin-feat-icon{color:var(--yellow);flex-shrink:0;font-size:.9rem;margin-top:.1rem}
-    .plugin-feat h4{font-family:var(--sans);font-size:.85rem;font-weight:700;margin-bottom:.2rem}
-    .plugin-feat p{font-size:.7rem;color:#404040;line-height:1.75}
+    .plugin-feat-icon{color:var(--text-muted);flex-shrink:0;font-size:.9rem;margin-top:.15rem}
+    .plugin-feat h4{font-size:.875rem;font-weight:600;margin-bottom:.2rem;color:var(--white)}
+    .plugin-feat p{font-size:.8rem;color:var(--text-muted);line-height:1.7;font-weight:400}
 
-    /* ── RESPONSIVE ── */
+    /* NYX */
+    #nyx{background:var(--bg-alt);border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
+    #nyx .inner{max-width:1200px;margin:0 auto;padding:6rem 2.5rem;display:grid;grid-template-columns:260px 1fr;gap:5rem;align-items:center}
+    .nyx-stage{display:flex;flex-direction:column;align-items:center;gap:1.5rem}
+    .nyx-big{
+      font-family:var(--mono);white-space:pre;line-height:1.3;
+      font-size:clamp(.9rem,2.2vw,1.5rem);color:var(--text-secondary);
+      text-align:center;transition:color .2s,opacity .15s,transform .15s;
+    }
+    .mood-pills{display:flex;gap:.4rem;flex-wrap:wrap;justify-content:center}
+    .mpill{
+      background:transparent;border:1px solid var(--border-subtle);
+      color:var(--text-muted);font-family:var(--font);font-size:.75rem;
+      font-weight:400;padding:.3rem .75rem;border-radius:100px;
+      cursor:pointer;transition:all .15s;
+    }
+    .mpill:hover,.mpill.active{border-color:#444;color:var(--text);background:rgba(255,255,255,0.04)}
+    .nyx-desc h3{font-size:2rem;font-weight:800;margin-bottom:.7rem;letter-spacing:-.04em;color:var(--white)}
+    .nyx-desc p{color:var(--text-muted);font-size:.875rem;line-height:1.85;max-width:520px;margin-bottom:.7rem;font-weight:400}
+    .nyx-facts{
+      display:grid;grid-template-columns:1fr 1fr;
+      gap:1px;background:var(--border-subtle);
+      border:1px solid var(--border-subtle);border-radius:8px;
+      overflow:hidden;margin-top:1.8rem;
+    }
+    .nfact{background:var(--bg);padding:.9rem 1.1rem}
+    .nfact .nl{font-size:.65rem;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin-bottom:.25rem;font-weight:500}
+    .nfact .nv{font-size:.8rem;color:var(--text);font-weight:400}
+    .coauthor-badge{
+      display:inline-flex;align-items:center;gap:.5rem;
+      border:1px solid var(--border-subtle);border-radius:6px;
+      padding:.35rem .85rem;margin-top:1rem;
+      font-size:.75rem;color:var(--text-muted);font-family:var(--mono);
+      background:var(--bg-card);
+    }
+
+    /* WHY */
+    #why{background:var(--bg)}
+    .vs-table{border:1px solid var(--border-subtle);border-radius:8px;overflow:hidden;margin-top:2.5rem}
+    .vs-header{
+      display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;
+      background:var(--bg-card);border-bottom:1px solid var(--border-subtle);
+    }
+    .vs-col-header{
+      padding:.8rem 1.1rem;font-size:.7rem;letter-spacing:.1em;
+      text-transform:uppercase;color:var(--text-muted);
+      border-right:1px solid var(--border-subtle);font-weight:500;
+    }
+    .vs-col-header:last-child{border-right:none}
+    .vs-col-header.lc{color:var(--white)}
+    .vs-row{
+      display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;
+      border-bottom:1px solid #0d0d0d;
+      transition:background .12s;
+    }
+    .vs-row:last-child{border-bottom:none}
+    .vs-row:hover{background:rgba(255,255,255,0.015)}
+    .vs-cell{
+      padding:.8rem 1.1rem;font-size:.8rem;color:var(--text-muted);
+      border-right:1px solid #0d0d0d;
+      display:flex;align-items:center;gap:.4rem;font-weight:400;
+    }
+    .vs-cell:last-child{border-right:none}
+    .vs-cell.feature-name{color:var(--text)}
+    .vs-cell.yes{color:var(--text)}
+    .vs-cell.no{color:#2a2a2a}
+    .vs-cell.partial{color:#666}
+    .vs-cell.lc-cell{background:rgba(255,255,255,0.015)}
+
+    /* INSTALL */
+    #install{text-align:center;padding:7rem 2.5rem;background:var(--bg-alt);border-top:1px solid var(--border-subtle)}
+    #install .inner{max-width:640px;margin:0 auto}
+    .install-methods{
+      display:grid;grid-template-columns:1fr 1fr;
+      gap:1px;background:var(--border-subtle);
+      border:1px solid var(--border-subtle);border-radius:8px;
+      overflow:hidden;margin:2rem auto;text-align:left;
+    }
+    .imethod{background:var(--bg-card);padding:1.5rem}
+    .imethod-label{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin-bottom:.85rem;font-weight:500}
+    .ibox{
+      background:var(--bg);border:1px solid var(--border-subtle);
+      padding:.7rem 1rem;border-radius:6px;
+      display:flex;align-items:center;gap:.9rem;margin-bottom:.6rem;
+    }
+    .ibox::before{content:'$';color:var(--text-muted);flex-shrink:0;font-family:var(--mono);font-size:.85rem}
+    .icmd{flex:1;font-size:.85rem;color:var(--text);font-family:var(--mono)}
+    .cpbtn{
+      background:transparent;border:1px solid var(--border);
+      color:var(--text-muted);font-family:var(--font);font-size:.7rem;font-weight:500;
+      padding:.25rem .6rem;border-radius:4px;cursor:pointer;
+      transition:all .15s;flex-shrink:0;
+    }
+    .cpbtn:hover{border-color:#555;color:var(--text)}
+    .cpbtn.ok{border-color:#555;color:var(--text)}
+    .imethod-note{font-size:.75rem;color:#333;line-height:1.6;font-weight:400}
+    .req-row{display:flex;justify-content:center;gap:1.5rem;margin-top:2rem;flex-wrap:wrap}
+    .req-item{font-size:.75rem;color:#333;display:flex;align-items:center;gap:.4rem;font-weight:400}
+    .req-item::before{content:'·';color:#3a3a3a}
+    .install-run{margin-top:2rem}
+    .install-run-label{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin-bottom:.75rem;font-weight:500}
+
+    /* FOOTER */
+    footer{
+      border-top:1px solid var(--border-subtle);
+      padding:1.6rem 2.5rem;
+      display:flex;justify-content:space-between;align-items:center;
+      font-size:.8rem;color:#333;flex-wrap:wrap;gap:1rem;
+    }
+    footer a{color:#444;text-decoration:none;transition:color .15s;font-weight:400}
+    footer a:hover{color:var(--text)}
+    .footer-links{display:flex;gap:2rem;align-items:center}
+    .mit-badge{
+      display:inline-flex;align-items:center;gap:.3rem;
+      border:1px solid var(--border-subtle);padding:.18rem .55rem;
+      border-radius:4px;font-size:.7rem;color:#333;
+      transition:all .15s;
+    }
+    .mit-badge:hover{border-color:#444;color:var(--text)!important}
+
+    /* ANIMATIONS */
+    @keyframes fadeUp{to{opacity:1;transform:none}}
+    @keyframes fadeLeft{to{opacity:1;transform:none}}
+
+    /* RESPONSIVE */
     @media(max-width:1024px){
       #hero{grid-template-columns:1fr;padding-top:6rem;max-width:100%}
       .hero-right{display:none}
       .qs-grid{grid-template-columns:1fr 1fr}
       .qs-step:nth-child(2){border-right:none}
-      .qs-step:nth-child(3){border-top:1px solid var(--gray2)}
+      .qs-step:nth-child(3){border-top:1px solid var(--border-subtle)}
       .features-grid{grid-template-columns:1fr 1fr}
       .feature:nth-child(2n){border-right:none}
-      .feature:nth-child(3n){border-right:1px solid var(--gray2)}
+      .feature:nth-child(3n){border-right:1px solid var(--border-subtle)}
       .providers-grid{grid-template-columns:1fr 1fr}
+      .pcard:nth-child(2){border-right:none}
+      .pcard:nth-child(3){border-top:1px solid var(--border-subtle)}
       #nyx .inner{grid-template-columns:1fr;padding:4rem 1.5rem;gap:3rem}
       .nyx-facts{grid-template-columns:1fr}
       .vs-header,.vs-row{grid-template-columns:1.4fr 1fr 1fr 1fr}
@@ -311,31 +575,34 @@
       .nav-links li:not(:last-child){display:none}
       .section-wrap{padding:4rem 1.2rem}
       #install{padding:5rem 1.2rem}
+      #nyx .inner{padding:4rem 1.2rem}
       .features-grid{grid-template-columns:1fr}
       .feature:nth-child(n){border-right:none}
       .providers-grid{grid-template-columns:1fr}
+      .pcard{border-right:none!important;border-bottom:1px solid var(--border-subtle)}
       .qs-grid{grid-template-columns:1fr}
-      .qs-step{border-right:none!important;border-bottom:1px solid var(--gray2)}
+      .qs-step{border-right:none!important;border-bottom:1px solid var(--border-subtle)}
+      .qs-step:last-child{border-bottom:none}
       .vs-header,.vs-row{grid-template-columns:1fr 1fr}
       .vs-cell:nth-child(3),.vs-col-header:nth-child(3){display:none}
       .vs-cell:nth-child(4),.vs-col-header:nth-child(4){display:none}
       .cmd-all-grid{grid-template-columns:1fr}
       .cmd-tabs{flex-wrap:nowrap}
       footer{flex-direction:column;align-items:flex-start;gap:.7rem}
-      h1{font-size:2.6rem}
+      h1{font-size:2.8rem}
     }
   </style>
 </head>
 <body>
-<div class="scanbeam"></div>
-<div class="hero-grid"></div>
+<div class="hero-bg"></div>
+<div class="hero-glow"></div>
 
 <!-- NAV -->
 <nav id="nav">
   <a class="nav-logo" href="#">
-    <span>Local</span><span style="color:var(--white)">Code</span>
+    <span>LocalCode</span>
     <span class="nav-logo-cat">( ·.· )</span>
-    <span class="nav-ver">v3.1.0</span>
+    <span class="nav-ver">v4.0.0</span>
   </a>
   <ul class="nav-links">
     <li><a href="#quickstart">Quick start</a></li>
@@ -351,21 +618,17 @@
 <!-- HERO -->
 <section id="hero">
   <div class="hero-left">
-    <div class="hero-tag">
-      <span class="hero-tag-dot"></span>
-      @localcode/cli &nbsp;·&nbsp; v3.1.0 &nbsp;·&nbsp; MIT open source
+    <div class="hero-badge">
+      <span class="hero-badge-dot"></span>
+      @localcode/cli &nbsp;·&nbsp; v4.0.0 &nbsp;·&nbsp; MIT open source
     </div>
-    <h1>
-      <span class="gw" data-t="Code">Code</span><br/>
-      <span class="acc gw" data-t="offline.">offline.</span><br/>
-      <span class="acc2">Own everything.</span>
-    </h1>
+    <h1>Code offline.<br/>Own everything.</h1>
     <p class="hero-desc">
-      A terminal AI coding assistant that runs <strong>100% local with Ollama</strong> — or connect Claude, OpenAI, or Groq. 30+ slash commands, a plugin system, hooks, MCP servers, and <strong>Nyx</strong>, your ASCII co-pilot.
+      A terminal AI coding assistant that runs 100% local with Ollama — or connect Claude, OpenAI, or Groq. 30+ slash commands, plugin system, hooks, MCP servers, and Nyx, your ASCII co-pilot.
     </p>
     <div class="hero-actions">
       <a href="#install" class="btn-p">↓ Install free</a>
-      <a href="https://github.com/thealxlabs/localcode" class="btn-s" target="_blank">⎇ GitHub</a>
+      <a href="https://github.com/TheLocalCodeTeam/localcode" class="btn-s" target="_blank">⎇ GitHub</a>
     </div>
     <div class="hero-stats">
       <div class="hero-stat"><div class="num">4</div><div class="lbl">Providers</div></div>
@@ -376,7 +639,7 @@
   </div>
 
   <div class="hero-right">
-    <div class="terminal bc" id="main-terminal">
+    <div class="terminal" id="main-terminal" style="position:relative">
       <div class="tbar">
         <div class="tdot"></div><div class="tdot"></div><div class="tdot"></div>
         <span class="ttitle">localcode — ~/projects/api</span>
@@ -421,7 +684,7 @@
 <div id="quickstart">
   <div class="section-wrap reveal">
     <div class="section-label">Quick start</div>
-    <h2>Zero to <span style="color:var(--yellow)">first commit</span> in 60 seconds.</h2>
+    <h2>Zero to first commit in 60 seconds.</h2>
     <p class="section-sub">One npm package. No config files, no daemons, no cloud setup required.</p>
     <div class="qs-grid">
       <div class="qs-step" data-n="01">
@@ -455,7 +718,8 @@
     <h2>Built different.</h2>
     <p class="section-sub">Everything Claude Code and Codex have — plus the things they'll never give you.</p>
     <div class="features-grid reveal">
-      <div class="feature feature-new">
+      <div class="feature">
+        <span class="feature-new-badge">New</span>
         <span class="feature-icon">◉</span>
         <h3>100% local with Ollama</h3>
         <p>Run <code>qwen2.5-coder</code>, <code>deepseek-r1</code>, <code>llama3.2</code>, or any Ollama model. No API key. No cloud. Your code stays on your machine.</p>
@@ -467,25 +731,29 @@
         <p>Use <code>/provider claude</code> mid-session. Switch from local Ollama to GPT-4o to Claude without restarting. Keys stored per-provider.</p>
         <span class="ftag">Multi-provider</span>
       </div>
-      <div class="feature feature-new">
+      <div class="feature">
+        <span class="feature-new-badge">New</span>
         <span class="feature-icon">⧉</span>
         <h3>Plugin system</h3>
         <p>Drop a <code>.js</code> file in <code>~/.localcode/plugins/</code> to add custom slash commands. Full access to the conversation context and tools.</p>
         <span class="ftag">Extensible</span>
       </div>
-      <div class="feature feature-new">
+      <div class="feature">
+        <span class="feature-new-badge">New</span>
         <span class="feature-icon">⚡</span>
         <h3>Hooks</h3>
         <p><code>PreToolUse</code>, <code>PostToolUse</code>, and <code>Notification</code> hooks — run custom scripts before or after any tool call, just like Claude Code.</p>
         <span class="ftag">Automation</span>
       </div>
-      <div class="feature feature-new">
+      <div class="feature">
+        <span class="feature-new-badge">New</span>
         <span class="feature-icon">◈</span>
         <h3>Memory files</h3>
         <p><code>~/.nyx.md</code> for global memory, <code>.nyx.md</code> in project root for project context. Both loaded automatically at startup.</p>
         <span class="ftag">Persistent context</span>
       </div>
-      <div class="feature feature-new">
+      <div class="feature">
+        <span class="feature-new-badge">New</span>
         <span class="feature-icon">⬡</span>
         <h3>MCP servers</h3>
         <p>Connect Model Context Protocol servers — both stdio and HTTP transports supported. Give the AI access to your databases, APIs, and tools.</p>
@@ -517,36 +785,35 @@
 <div id="providers">
   <div class="section-wrap">
     <div class="section-label">Providers</div>
-    <h2>Your model,<br/><span style="color:var(--gray)">your choice.</span></h2>
-    <p class="section-sub">Switch live with <code style="color:var(--yellow)">/provider &lt;name&gt;</code>. API keys are stored per-provider and auto-loaded from env.</p>
+    <h2>Your model, your choice.</h2>
+    <p class="section-sub">Switch live with <code style="font-family:var(--mono);color:var(--text-secondary)">/provider &lt;name&gt;</code>. API keys are stored per-provider and auto-loaded from env.</p>
     <div class="providers-grid reveal">
-      <div class="pcard pcard-highlight">
-        <div class="pcard-provider-icon">&#x25C9;</div>
+      <div class="pcard">
+        <div class="pcard-icon">&#x25C9;</div>
         <span class="pname">Ollama</span>
         <span class="pmodels">qwen2.5-coder · llama3.2 · deepseek-r1 · mistral · gemma3 · llava</span>
-        <span class="pbadge b-free">Free · Fully local · No API key</span>
-        <span class="free-tag">Runs 100% on your machine</span>
+        <span class="pbadge">Free · Fully local · No API key</span>
         <span class="pcard-setup">Requires Ollama running locally</span>
       </div>
       <div class="pcard">
-        <div class="pcard-provider-icon" style="color:#e8760a">&#x2736;</div>
-        <span class="pname" style="color:#e8760a">Claude</span>
+        <div class="pcard-icon">&#x2736;</div>
+        <span class="pname">Claude</span>
         <span class="pmodels">claude-sonnet-4-5 · claude-opus-4-5 · claude-haiku-4-5</span>
-        <span class="pbadge b-key">ANTHROPIC_API_KEY</span>
+        <span class="pbadge">ANTHROPIC_API_KEY</span>
         <span class="pcard-setup">console.anthropic.com</span>
       </div>
       <div class="pcard">
-        <div class="pcard-provider-icon" style="color:var(--green)">&#x25A3;</div>
-        <span class="pname" style="color:var(--green)">OpenAI</span>
+        <div class="pcard-icon">&#x25A3;</div>
+        <span class="pname">OpenAI</span>
         <span class="pmodels">gpt-4o · gpt-4o-mini · o1-mini · o3-mini</span>
-        <span class="pbadge b-key">OPENAI_API_KEY</span>
+        <span class="pbadge">OPENAI_API_KEY</span>
         <span class="pcard-setup">platform.openai.com/api-keys</span>
       </div>
       <div class="pcard">
-        <div class="pcard-provider-icon" style="color:var(--red)">&#x25D9;</div>
-        <span class="pname" style="color:var(--red)">Groq</span>
+        <div class="pcard-icon">&#x25D9;</div>
+        <span class="pname">Groq</span>
         <span class="pmodels">llama-3.3-70b · mixtral-8x7b · gemma2-9b</span>
-        <span class="pbadge b-free">Free tier available</span>
+        <span class="pbadge">Free tier available</span>
         <span class="pcard-setup">console.groq.com/keys</span>
       </div>
     </div>
@@ -557,8 +824,8 @@
 <div id="commands">
   <div class="section-wrap">
     <div class="section-label">Commands</div>
-    <h2>30+ slash commands.<br/><span style="color:var(--yellow)">All in the terminal.</span></h2>
-    <p class="section-sub">Type <code style="color:var(--yellow)">/</code> to open the interactive picker. Every command has usage hints and tab completion.</p>
+    <h2>30+ slash commands.<br/>All in the terminal.</h2>
+    <p class="section-sub">Type <code style="font-family:var(--mono);color:var(--text-secondary)">/</code> to open the interactive picker. Every command has usage hints and tab completion.</p>
 
     <div class="cmd-tabs" id="cmd-tabs">
       <button class="cmd-tab active" data-panel="featured">Featured</button>
@@ -587,18 +854,18 @@
           <div class="cmd-demo-title">Try it: /review</div>
           <div class="cmd-demo-desc">Paste a file path and get a structured code review — complexity analysis, potential bugs, style suggestions, and refactoring ideas. Works with any language Nyx can read.</div>
           <div class="cmd-demo-term">
-            <div><span class="ty">❯</span> <span class="tw">/review src/api/auth.ts</span></div>
-            <div style="margin-top:.4rem"><span class="tg">◈ </span><span class="tw">Reading </span><span class="tc">src/api/auth.ts</span><span class="tg"> (142 lines)</span></div>
-            <div><span class="tgr">✓ </span><span class="tg">Review complete — 3 issues found</span></div>
-            <div style="margin-top:.3rem;color:#444">  [HIGH] SQL injection risk on line 48</div>
-            <div style="color:#444">  [MED]  No rate limiting on login endpoint</div>
-            <div style="color:#444">  [LOW]  Unused import: bcryptjs</div>
+            <div><span class="tw">❯ /review src/api/auth.ts</span></div>
+            <div style="margin-top:.4rem"><span class="tg">◈ Reading </span><span class="tw">src/api/auth.ts</span><span class="tg"> (142 lines)</span></div>
+            <div><span class="tg">✓ Review complete — 3 issues found</span></div>
+            <div style="margin-top:.3rem;color:var(--text-muted)">  [HIGH] SQL injection risk on line 48</div>
+            <div style="color:var(--text-muted)">  [MED]  No rate limiting on login endpoint</div>
+            <div style="color:var(--text-muted)">  [LOW]  Unused import: bcryptjs</div>
           </div>
           <div class="cmd-demo-title" style="margin-top:.8rem">Try it: /test</div>
           <div class="cmd-demo-term">
-            <div><span class="ty">❯</span> <span class="tw">/test src/utils/parser.ts</span></div>
-            <div style="margin-top:.4rem"><span class="tg">◈ </span><span class="tg">Detected framework: </span><span class="ty">vitest</span></div>
-            <div><span class="tgr">✓ </span><span class="tg">Generated </span><span class="tw">12 tests</span><span class="tg"> → </span><span class="tc">src/utils/parser.test.ts</span></div>
+            <div><span class="tw">❯ /test src/utils/parser.ts</span></div>
+            <div style="margin-top:.4rem"><span class="tg">◈ Detected framework: </span><span class="tw">vitest</span></div>
+            <div><span class="tg">✓ Generated </span><span class="tw">12 tests</span><span class="tg"> → </span><span class="tw">src/utils/parser.test.ts</span></div>
           </div>
         </div>
       </div>
@@ -621,8 +888,8 @@
           <div class="cmd-demo-title">/theme</div>
           <div class="cmd-demo-desc">Four built-in themes: dark (default), nord, monokai, and light. Instant toggle, persisted across sessions.</div>
           <div class="cmd-demo-term">
-            <div><span class="ty">❯</span> <span class="tw">/theme nord</span></div>
-            <div style="margin-top:.3rem"><span class="tgr">✓ </span><span class="tg">Theme set to </span><span class="ty">nord</span></div>
+            <div><span class="tw">❯ /theme nord</span></div>
+            <div style="margin-top:.3rem"><span class="tg">✓ Theme set to </span><span class="tw">nord</span></div>
           </div>
           <div class="cmd-demo-title" style="margin-top:.9rem">/history</div>
           <div class="cmd-demo-desc">Browse your past sessions by date and topic. Select any session to restore its context — files, messages, and checkpoints.</div>
@@ -644,10 +911,10 @@
           <div class="cmd-demo-title">/commit — AI-generated commits</div>
           <div class="cmd-demo-desc">Stage your changes, run /commit, and Nyx reads the diff and writes a conventional commit message. She's automatically added as co-author.</div>
           <div class="cmd-demo-term">
-            <div><span class="ty">❯</span> <span class="tw">/commit</span></div>
-            <div style="margin-top:.3rem"><span class="tg">⟳ </span><span class="tg">Reading staged diff…</span></div>
-            <div><span class="tgr">✓ </span><span class="tw">feat(auth): add refresh token rotation</span></div>
-            <div style="color:#2e2e2e;font-size:.64rem;margin-top:.2rem">  Co-authored-by: Nyx &lt;nyx@thealxlabs.ca&gt;</div>
+            <div><span class="tw">❯ /commit</span></div>
+            <div style="margin-top:.3rem"><span class="tg">⟳ Reading staged diff…</span></div>
+            <div><span class="tw">✓ feat(auth): add refresh token rotation</span></div>
+            <div style="color:#333;font-size:.65rem;margin-top:.2rem">  Co-authored-by: Nyx &lt;nyx@thealxlabs.ca&gt;</div>
           </div>
         </div>
       </div>
@@ -666,9 +933,9 @@
           <div class="cmd-demo-title">/index — TF-IDF codebase search</div>
           <div class="cmd-demo-desc">Build a full semantic index of your project. Instead of injecting thousands of lines of context, Nyx finds the 5-10 most relevant files automatically.</div>
           <div class="cmd-demo-term">
-            <div><span class="ty">❯</span> <span class="tw">/index</span></div>
-            <div style="margin-top:.3rem"><span class="tg">◈ </span><span class="tg">Indexed </span><span class="tw">847 files</span><span class="tg"> in 1.2s</span></div>
-            <div><span class="tgr">✓ </span><span class="tg">TF-IDF index ready. Ask me anything.</span></div>
+            <div><span class="tw">❯ /index</span></div>
+            <div style="margin-top:.3rem"><span class="tg">◈ Indexed </span><span class="tw">847 files</span><span class="tg"> in 1.2s</span></div>
+            <div><span class="tg">✓ TF-IDF index ready. Ask me anything.</span></div>
           </div>
         </div>
       </div>
@@ -687,10 +954,10 @@
           <div class="cmd-demo-title">/provider — live switching</div>
           <div class="cmd-demo-desc">Switch between any provider mid-session without losing context. Your API keys are stored per-provider and reloaded automatically.</div>
           <div class="cmd-demo-term">
-            <div><span class="ty">❯</span> <span class="tw">/provider claude</span></div>
-            <div style="margin-top:.3rem"><span class="tgr">✓ </span><span class="tg">Switched to </span><span class="ty">claude-sonnet-4-5</span></div>
-            <div><span class="ty">❯</span> <span class="tw">/provider ollama</span></div>
-            <div><span class="tgr">✓ </span><span class="tg">Switched to </span><span class="ty">qwen2.5-coder:7b</span><span class="tg"> (local)</span></div>
+            <div><span class="tw">❯ /provider claude</span></div>
+            <div style="margin-top:.3rem"><span class="tg">✓ Switched to </span><span class="tw">claude-sonnet-4-5</span></div>
+            <div><span class="tw">❯ /provider ollama</span></div>
+            <div><span class="tg">✓ Switched to </span><span class="tw">qwen2.5-coder:7b</span><span class="tg"> (local)</span></div>
           </div>
         </div>
       </div>
@@ -709,9 +976,9 @@
           <div class="cmd-demo-title">/hook — automation</div>
           <div class="cmd-demo-desc">Run custom scripts before or after any tool call. Wire up linters, formatters, notifications, or anything else you want Nyx to trigger automatically.</div>
           <div class="cmd-demo-term">
-            <div style="color:#2a2a2a;font-size:.64rem">// ~/.localcode/hooks/post-write.sh</div>
-            <div style="color:#444">npm run lint --fix $FILE</div>
-            <div style="color:#444">git add $FILE</div>
+            <div style="color:#333;font-size:.66rem">// ~/.localcode/hooks/post-write.sh</div>
+            <div style="color:var(--text-muted)">npm run lint --fix $FILE</div>
+            <div style="color:var(--text-muted)">git add $FILE</div>
           </div>
         </div>
       </div>
@@ -763,21 +1030,21 @@
 <div id="plugins">
   <div class="section-wrap reveal">
     <div class="section-label">Plugin system</div>
-    <h2>Extend Nyx with<br/><span style="color:var(--cyan)">your own commands.</span></h2>
-    <p class="section-sub">Drop a <code style="color:var(--yellow)">.js</code> file in <code style="color:var(--yellow)">~/.localcode/plugins/</code> and it becomes a first-class slash command.</p>
+    <h2>Extend Nyx with<br/>your own commands.</h2>
+    <p class="section-sub">Drop a <code style="font-family:var(--mono);color:var(--text-secondary)">.js</code> file in <code style="font-family:var(--mono);color:var(--text-secondary)">~/.localcode/plugins/</code> and it becomes a first-class slash command.</p>
     <div class="plugin-grid">
       <div class="plugin-code">
-        <div style="color:#333;font-size:.62rem;margin-bottom:.9rem;letter-spacing:.08em">// ~/.localcode/plugins/deploy.js</div>
-        <div><span class="kw">module</span>.<span class="fn">exports</span> = {</div>
-        <div>&nbsp;&nbsp;<span class="fn">name</span>: <span class="str">'deploy'</span>,</div>
-        <div>&nbsp;&nbsp;<span class="fn">description</span>: <span class="str">'Deploy to production'</span>,</div>
-        <div>&nbsp;&nbsp;<span class="kw">async</span> <span class="fn">run</span>({ context, tools }) {</div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="cm">// Full access to AI context + tools</span></div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">const</span> review = <span class="kw">await</span> context.<span class="fn">ask</span>(</div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">'Check for security issues'</span></div>
+        <div style="color:#333;font-size:.7rem;margin-bottom:1rem;letter-spacing:.04em">// ~/.localcode/plugins/deploy.js</div>
+        <div><span class="pk">module</span>.<span class="pf">exports</span> = {</div>
+        <div>&nbsp;&nbsp;<span class="pf">name</span>: <span class="ps">'deploy'</span>,</div>
+        <div>&nbsp;&nbsp;<span class="pf">description</span>: <span class="ps">'Deploy to production'</span>,</div>
+        <div>&nbsp;&nbsp;<span class="pk">async</span> <span class="pf">run</span>({ context, tools }) {</div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="pc">// Full access to AI context + tools</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="pk">const</span> review = <span class="pk">await</span> context.<span class="pf">ask</span>(</div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="ps">'Check for security issues'</span></div>
         <div>&nbsp;&nbsp;&nbsp;&nbsp;);</div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">if</span> (review.<span class="fn">safe</span>) {</div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">await</span> tools.<span class="fn">shell</span>(<span class="str">'npm run deploy'</span>);</div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="pk">if</span> (review.<span class="pf">safe</span>) {</div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="pk">await</span> tools.<span class="pf">shell</span>(<span class="ps">'npm run deploy'</span>);</div>
         <div>&nbsp;&nbsp;&nbsp;&nbsp;}</div>
         <div>&nbsp;&nbsp;}</div>
         <div>};</div>
@@ -787,7 +1054,7 @@
           <span class="plugin-feat-icon">◈</span>
           <div>
             <h4>Zero boilerplate</h4>
-            <p>Name the file, export an object with <code style="color:var(--yellow)">name</code>, <code style="color:var(--yellow)">description</code>, and <code style="color:var(--yellow)">run</code>. Nyx hot-reloads it on next command.</p>
+            <p>Name the file, export an object with <code style="font-family:var(--mono);color:var(--text-secondary)">name</code>, <code style="font-family:var(--mono);color:var(--text-secondary)">description</code>, and <code style="font-family:var(--mono);color:var(--text-secondary)">run</code>. Nyx hot-reloads it on next command.</p>
           </div>
         </div>
         <div class="plugin-feat">
@@ -801,14 +1068,14 @@
           <span class="plugin-feat-icon">⧉</span>
           <div>
             <h4>Share and publish</h4>
-            <p>Package your plugin as an npm module. Anyone can install it with <code style="color:var(--yellow)">npm install -g localcode-plugin-deploy</code>.</p>
+            <p>Package your plugin as an npm module. Anyone can install it with <code style="font-family:var(--mono);color:var(--text-secondary)">npm install -g localcode-plugin-deploy</code>.</p>
           </div>
         </div>
         <div class="plugin-feat">
           <span class="plugin-feat-icon">⎇</span>
           <div>
             <h4>Hooks too</h4>
-            <p>Plugins can register <code style="color:var(--yellow)">PreToolUse</code> and <code style="color:var(--yellow)">PostToolUse</code> hooks that fire automatically on every tool call.</p>
+            <p>Plugins can register <code style="font-family:var(--mono);color:var(--text-secondary)">PreToolUse</code> and <code style="font-family:var(--mono);color:var(--text-secondary)">PostToolUse</code> hooks that fire automatically on every tool call.</p>
           </div>
         </div>
       </div>
@@ -820,7 +1087,7 @@
 <div id="why">
   <div class="section-wrap">
     <div class="section-label">Why LocalCode</div>
-    <h2>The one they don't<br/><span style="color:var(--yellow)">want you to have.</span></h2>
+    <h2>The one they don't<br/>want you to have.</h2>
     <p class="section-sub">Claude Code is great — but it locks you in. LocalCode gives you everything they have, plus the things that matter for serious developers.</p>
     <div class="vs-table reveal">
       <div class="vs-header">
@@ -902,7 +1169,7 @@
         <div class="vs-cell partial">~ Free tier</div>
       </div>
     </div>
-    <p style="color:#252525;font-size:.66rem;margin-top:1.2rem;text-align:right">Last updated March 2026. Subject to change as tools evolve.</p>
+    <p style="color:#2a2a2a;font-size:.75rem;margin-top:1.2rem;text-align:right;font-weight:400">Last updated March 2026. Subject to change as tools evolve.</p>
   </div>
 </div>
 
@@ -924,14 +1191,14 @@
     <div class="nyx-desc">
       <div class="section-label">Your co-pilot</div>
       <h3>Meet Nyx.</h3>
-      <p>Nyx is LocalCode's ASCII cat mascot. She lives in the header of every session, reacting in real time to what's happening — thinking when the model is working, lighting up green on success, turning red on errors.</p>
-      <p>She's not just decoration. Every git commit made through <code style="color:var(--yellow)">/commit</code> carries her co-author signature — so she shows up as a real contributor on your GitHub repos.</p>
+      <p>Nyx is LocalCode's ASCII cat mascot. She lives in the header of every session, reacting in real time to what's happening — thinking when the model is working, lighting up on success, shifting on errors.</p>
+      <p>She's not just decoration. Every git commit made through <code style="font-family:var(--mono);color:var(--text-secondary)">/commit</code> carries her co-author signature — so she shows up as a real contributor on your GitHub repos.</p>
       <div class="coauthor-badge">Co-authored-by: Nyx &lt;nyx@thealxlabs.ca&gt;</div>
       <div class="nyx-facts">
         <div class="nfact"><div class="nl">Mood states</div><div class="nv">idle · thinking · happy · error · waiting</div></div>
-        <div class="nfact"><div class="nl">Co-author email</div><div class="nv" style="font-family:var(--mono);font-size:.7rem">nyx@thealxlabs.ca</div></div>
+        <div class="nfact"><div class="nl">Co-author email</div><div class="nv" style="font-family:var(--mono);font-size:.75rem">nyx@thealxlabs.ca</div></div>
         <div class="nfact"><div class="nl">Appears in</div><div class="nv">Header · Commits · Errors · Setup wizard</div></div>
-        <div class="nfact"><div class="nl">Created by</div><div class="nv"><a href="https://github.com/thealxlabs" style="color:var(--yellow);text-decoration:none">TheAlxLabs</a> · Toronto</div></div>
+        <div class="nfact"><div class="nl">Created by</div><div class="nv"><a href="https://github.com/TheLocalCodeTeam" style="color:var(--text-secondary);text-decoration:none">TheLocalCodeTeam</a> · Toronto</div></div>
       </div>
     </div>
   </div>
@@ -941,17 +1208,17 @@
 <div id="install">
   <div class="inner reveal">
     <div class="section-label" style="justify-content:center">Get started</div>
-    <h2 style="font-size:clamp(2rem,5vw,3.5rem)">Ship it to your<br/>terminal now.</h2>
-    <p style="color:#333;font-size:.8rem;margin-top:.5rem">Node 18 or later required. Ollama is optional — but recommended for free local AI.</p>
+    <h2 style="font-size:clamp(2rem,5vw,3.2rem)">Ship it to your<br/>terminal now.</h2>
+    <p style="color:var(--text-muted);font-size:.9rem;margin-top:.6rem;font-weight:400">Node 18 or later required. Ollama is optional — but recommended for free local AI.</p>
 
-    <div class="install-methods bc">
+    <div class="install-methods">
       <div class="imethod">
         <div class="imethod-label">Global install (recommended)</div>
         <div class="ibox">
           <span class="icmd">npm install -g @localcode/cli</span>
           <button class="cpbtn" onclick="cp(this,'npm install -g @localcode/cli')">copy</button>
         </div>
-        <div class="imethod-note">Installs the <code style="color:var(--yellow)">localcode</code> command globally.</div>
+        <div class="imethod-note">Installs the <code style="font-family:var(--mono);color:var(--text-muted)">localcode</code> command globally.</div>
       </div>
       <div class="imethod">
         <div class="imethod-label">No install needed</div>
@@ -965,11 +1232,11 @@
 
     <div class="install-run">
       <div class="install-run-label">Then launch:</div>
-      <div class="ibox bc" style="max-width:360px;margin:0 auto">
+      <div class="ibox" style="max-width:340px;margin:0 auto">
         <span class="icmd">localcode</span>
         <button class="cpbtn" onclick="cp(this,'localcode')">copy</button>
       </div>
-      <p style="color:#222;font-size:.68rem;margin-top:.7rem">First run → setup wizard → pick provider → start coding.</p>
+      <p style="color:#333;font-size:.8rem;margin-top:.8rem;font-weight:400">First run → setup wizard → pick provider → start coding.</p>
     </div>
 
     <div class="req-row">
@@ -985,60 +1252,51 @@
 <!-- FOOTER -->
 <footer>
   <div class="footer-links">
-    <span><a href="#"><span style="color:var(--yellow)">LocalCode</span></a> v3.1.0</span>
-    <a href="https://github.com/thealxlabs/localcode" target="_blank">⎇ GitHub</a>
+    <span><a href="#" style="color:var(--text-secondary)">LocalCode</a> v4.0.0</span>
+    <a href="https://github.com/TheLocalCodeTeam/localcode" target="_blank">⎇ GitHub</a>
     <a href="https://npmjs.com/package/@localcode/cli" target="_blank">npm</a>
-    <a href="https://github.com/thealxlabs/localcode/blob/main/LICENSE" target="_blank" class="mit-badge">MIT</a>
+    <a href="https://github.com/TheLocalCodeTeam/localcode/blob/main/LICENSE" target="_blank" class="mit-badge">MIT</a>
   </div>
-  <span>Built by <a href="https://github.com/thealxlabs" target="_blank">TheAlxLabs</a> · co-piloted by Nyx &nbsp;<span style="color:var(--yellow);font-family:var(--mono)">( ·.· )</span></span>
+  <span>Built by <a href="https://github.com/TheLocalCodeTeam" target="_blank">TheLocalCodeTeam</a> · co-piloted by Nyx <span style="color:var(--text-muted);font-family:var(--mono)">( ·.· )</span></span>
 </footer>
 
 <script>
-// ── CUSTOM CURSOR ────────────────────────────────────────────────────────────
-const dot = document.createElement('div');
-dot.style.cssText='position:fixed;width:5px;height:5px;background:var(--yellow);border-radius:50%;pointer-events:none;z-index:99999;transform:translate(-50%,-50%);mix-blend-mode:difference;transition:transform .1s ease';
-document.body.appendChild(dot);
-document.addEventListener('mousemove',e=>{dot.style.left=e.clientX+'px';dot.style.top=e.clientY+'px'});
-document.addEventListener('mousedown',()=>dot.style.transform='translate(-50%,-50%) scale(2.5)');
-document.addEventListener('mouseup',()=>dot.style.transform='translate(-50%,-50%) scale(1)');
-
-// ── NAV SCROLL ───────────────────────────────────────────────────────────────
+// NAV SCROLL
 window.addEventListener('scroll',()=>{
   document.getElementById('nav').classList.toggle('scrolled',window.scrollY>40);
 });
 
-// ── TERMINAL ANIMATION ───────────────────────────────────────────────────────
+// TERMINAL ANIMATION
 const scene = document.getElementById('tscene');
 
 const NYX_HDR = `<div class="tnyx-header">
   <div class="tnyx-art" id="tnyx"> /\\_/\\ \n( ·.· )\n &gt; ♥ &lt; </div>
   <div class="tnyx-info">
-    <span><span class="ty" style="font-weight:700">LocalCode</span> <span class="tg">v3.1.0 · @localcode/cli</span></span>
-    <span><span class="tg">provider  </span><span class="ty">ollama</span><span class="tg">  qwen2.5-coder:7b</span></span>
-    <span><span class="tg">cwd       </span><span class="tc">~/projects/api</span></span>
+    <span><span class="tw" style="font-weight:600">LocalCode</span> <span class="tg">v4.0.0 · @localcode/cli</span></span>
+    <span><span class="tg">provider  </span><span class="tw">ollama</span><span class="tg">  qwen2.5-coder:7b</span></span>
+    <span><span class="tg">cwd       </span><span class="tl">~/projects/api</span></span>
     <span><span class="tg">memory    </span><span class="tw">.nyx.md</span><span class="tg"> loaded</span></span>
   </div>
 </div>`;
 
-// Each frame: [delay_ms, html_or_null, typeTargetId, typeText, msPerChar, cursorId]
 const FRAMES = [
   [0,    NYX_HDR],
-  [200,  `<div class="trow"><span class="ty">❯ </span><span class="tw" id="tw1"></span><span class="cursor" id="tc1"></span></div>`],
+  [200,  `<div class="trow"><span class="tg">❯ </span><span class="tw" id="tw1"></span><span class="cursor" id="tc1"></span></div>`],
   [300,  null,'tw1','review src/routes/auth.ts',38,'tc1'],
-  [1400, `<div class="trow"><span class="tg">◈ </span><span class="tw">Reading </span><span class="tc">src/routes/auth.ts</span><span class="tg"> (198 lines)</span></div>`],
-  [2000, `<div class="trow"><span class="tg">⟳ </span><span class="tc">read_file</span><span class="tg">  path='src/routes/auth.ts'</span></div>`],
-  [2700, `<div class="trow" style="margin-top:.2rem"><span class="tr">⚠ </span><span class="tw">[HIGH] SQL injection risk on line 48</span></div>`],
-  [3000, `<div class="trow"><span class="tr">⚠ </span><span class="tw">[MED]  No rate limiting on /login</span></div>`],
+  [1400, `<div class="trow"><span class="tg">◈ </span><span class="tg">Reading </span><span class="tw">src/routes/auth.ts</span><span class="tg"> (198 lines)</span></div>`],
+  [2000, `<div class="trow"><span class="tg">⟳ </span><span class="tl">read_file</span><span class="tg">  path='src/routes/auth.ts'</span></div>`],
+  [2700, `<div class="trow" style="margin-top:.2rem"><span class="td">⚠ </span><span class="tw">[HIGH] SQL injection risk on line 48</span></div>`],
+  [3000, `<div class="trow"><span class="td">⚠ </span><span class="tw">[MED]  No rate limiting on /login</span></div>`],
   [3300, `<div class="trow"><span class="tg">  </span><span class="tg">[LOW]  Unused import: bcryptjs</span></div>`],
-  [3800, `<div class="trow" style="margin-top:.3rem"><span class="ty">❯ </span><span class="tw" id="tw2"></span><span class="cursor" id="tc2"></span></div>`],
+  [3800, `<div class="trow" style="margin-top:.3rem"><span class="tg">❯ </span><span class="tw" id="tw2"></span><span class="cursor" id="tc2"></span></div>`],
   [4000, null,'tw2','/provider claude',38,'tc2'],
-  [4900, `<div class="trow"><span class="tgr">✓ </span><span class="tg">Switched to </span><span class="ty">claude-sonnet-4-5</span></div>`],
-  [5400, `<div class="trow" style="margin-top:.3rem"><span class="ty">❯ </span><span class="tw" id="tw3"></span><span class="cursor" id="tc3"></span></div>`],
+  [4900, `<div class="trow"><span class="tg">✓ </span><span class="tg">Switched to </span><span class="tw">claude-sonnet-4-5</span></div>`],
+  [5400, `<div class="trow" style="margin-top:.3rem"><span class="tg">❯ </span><span class="tw" id="tw3"></span><span class="cursor" id="tc3"></span></div>`],
   [5600, null,'tw3','/commit',38,'tc3'],
   [6300, `<div class="trow"><span class="tg">⟳ </span><span class="tg">Generating commit from staged diff…</span></div>`],
-  [7200, `<div class="trow"><span class="tgr">✓ </span><span class="tw">fix(auth): sanitize inputs + add rate limiting</span></div>`],
+  [7200, `<div class="trow"><span class="tw">✓ fix(auth): sanitize inputs + add rate limiting</span></div>`],
   [7600, `<div class="trow"><span class="tg" style="font-size:.64rem">  Co-authored-by: Nyx &lt;nyx@thealxlabs.ca&gt;</span></div>`],
-  [8300, `<div class="trow" style="margin-top:.3rem"><span class="ty">❯ </span><span class="cursor"></span></div>`],
+  [8300, `<div class="trow" style="margin-top:.3rem"><span class="tg">❯ </span><span class="cursor"></span></div>`],
 ];
 
 let timeouts = [];
@@ -1073,25 +1331,25 @@ function playTerminal(){
   });
   // Nyx mood transitions
   timeouts.push(setTimeout(()=>{const n=document.getElementById('tnyx');if(n)n.innerHTML=' /\\_/\\ \n( ?.? )\n &gt; ~ &lt; ';},1400));
-  timeouts.push(setTimeout(()=>{const n=document.getElementById('tnyx');if(n){n.innerHTML=' /\\_/\\ \n( ^.^ )\n &gt; ★ &lt; ';n.style.color='var(--green)';}},7200));
+  timeouts.push(setTimeout(()=>{const n=document.getElementById('tnyx');if(n){n.innerHTML=' /\\_/\\ \n( ^.^ )\n &gt; ★ &lt; ';n.style.color='var(--text)';}},7200));
 }
 
 document.getElementById('replay-btn').addEventListener('click',playTerminal);
 playTerminal();
 
-// ── NYX MOOD SWITCHER ────────────────────────────────────────────────────────
+// NYX MOOD SWITCHER
 const MOODS={
-  idle:    {art:' /\\_/\\ \n( ·.· )\n &gt; ♥ &lt; ',color:'var(--yellow)'},
-  thinking:{art:' /\\_/\\ \n( ?.? )\n &gt; ~ &lt; ',color:'var(--yellow)'},
-  happy:   {art:' /\\_/\\ \n( ^.^ )\n &gt; ★ &lt; ',color:'var(--green)'},
-  error:   {art:' /\\_/\\ \n( ×.× )\n &gt; ! &lt; ',color:'var(--red)'},
-  waiting: {art:' /\\_/\\ \n( -.o )\n &gt; … &lt; ',color:'#888'},
+  idle:    {art:' /\\_/\\ \n( ·.· )\n &gt; ♥ &lt; ',color:'var(--text-secondary)'},
+  thinking:{art:' /\\_/\\ \n( ?.? )\n &gt; ~ &lt; ',color:'var(--text-secondary)'},
+  happy:   {art:' /\\_/\\ \n( ^.^ )\n &gt; ★ &lt; ',color:'var(--text)'},
+  error:   {art:' /\\_/\\ \n( ×.× )\n &gt; ! &lt; ',color:'var(--text-muted)'},
+  waiting: {art:' /\\_/\\ \n( -.o )\n &gt; … &lt; ',color:'#555'},
 };
 const nyxEl=document.getElementById('nyx-art');
 function setMood(mood){
   const m=MOODS[mood];
   nyxEl.style.opacity='0';
-  nyxEl.style.transform='scale(0.9)';
+  nyxEl.style.transform='scale(0.95)';
   nyxEl.style.transition='opacity .15s,transform .15s,color .2s';
   setTimeout(()=>{
     nyxEl.innerHTML=m.art;
@@ -1106,7 +1364,7 @@ let moodIdx=0;
 const moodTimer=setInterval(()=>{moodIdx=(moodIdx+1)%moodCycle.length;setMood(moodCycle[moodIdx]);},2800);
 document.querySelectorAll('.mpill').forEach(b=>b.addEventListener('click',()=>clearInterval(moodTimer)));
 
-// ── COMMAND TABS ─────────────────────────────────────────────────────────────
+// COMMAND TABS
 document.querySelectorAll('.cmd-tab').forEach(tab=>{
   tab.addEventListener('click',()=>{
     document.querySelectorAll('.cmd-tab').forEach(t=>t.classList.remove('active'));
@@ -1125,7 +1383,7 @@ document.querySelectorAll('.cmd-tab').forEach(tab=>{
   });
 });
 
-// ── SCROLL REVEAL ────────────────────────────────────────────────────────────
+// SCROLL REVEAL
 const ro=new IntersectionObserver(entries=>{
   entries.forEach(e=>{
     if(!e.isIntersecting)return;
@@ -1133,36 +1391,27 @@ const ro=new IntersectionObserver(entries=>{
     const kids=e.target.querySelectorAll('.feature,.pcard,.qs-step,.cmd-row,.cmd-all-row,.vs-row,.plugin-feat');
     kids.forEach((k,i)=>{
       k.style.opacity='0';
-      k.style.transform='translateY(12px)';
+      k.style.transform='translateY(10px)';
       k.style.transition='none';
       setTimeout(()=>{
         k.style.transition='opacity .4s ease,transform .4s ease';
         k.style.opacity='1';
         k.style.transform='none';
-      },i*45);
+      },i*40);
     });
   });
 },{threshold:0.06});
 document.querySelectorAll('.reveal').forEach(el=>ro.observe(el));
 
-// ── COPY ──────────────────────────────────────────────────────────────────────
+// COPY
 function cp(btn,text){
   navigator.clipboard.writeText(text).then(()=>{
     const orig=btn.textContent;
-    btn.textContent='copied!';
+    btn.textContent='copied';
     btn.classList.add('ok');
     setTimeout(()=>{btn.textContent=orig;btn.classList.remove('ok');},1800);
   });
 }
-
-// ── GLITCH ON H1 ─────────────────────────────────────────────────────────────
-const gs=document.createElement('style');
-gs.textContent=`.gw{position:relative;display:inline-block}.gw::before,.gw::after{content:attr(data-t);position:absolute;top:0;left:0;width:100%;height:100%;font-family:inherit;font-size:inherit;font-weight:inherit;letter-spacing:inherit;line-height:inherit;pointer-events:none}.gw::before{color:var(--cyan);opacity:.4}.gw::after{color:var(--red);opacity:.2}`;
-document.head.appendChild(gs);
-document.querySelectorAll('.gw').forEach(el=>{
-  el.addEventListener('mouseenter',()=>{el.style.animation='glitch .4s steps(1) forwards';});
-  el.addEventListener('animationend',()=>{el.style.animation='';});
-});
 </script>
 </body>
 </html>

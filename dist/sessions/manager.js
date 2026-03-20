@@ -125,7 +125,7 @@ export function loadSession() {
         model: PROVIDERS.ollama.defaultModel,
         messages: [],
         checkpoints: [],
-        approvalMode: 'suggest',
+        approvalMode: 'auto-edit',
         workingDir: process.cwd(),
         apiKeys,
         systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -137,6 +137,14 @@ export function loadSession() {
         sessionCost: 0,
         lastAssistantMessage: '',
         theme: 'dark',
+        // v4 defaults
+        modelRouting: null,
+        budgetLimit: null,
+        budgetFallbackModel: null,
+        safeMode: false,
+        autopilotActive: false,
+        providerCallLog: [],
+        dna: null,
     };
     if (!fs.existsSync(STATE_FILE))
         return defaults;
@@ -172,6 +180,13 @@ export function saveSession(state) {
         autoCheckpoint: state.autoCheckpoint,
         maxSteps: state.maxSteps,
         theme: state.theme,
+        // v4 — persisted
+        modelRouting: state.modelRouting,
+        budgetLimit: state.budgetLimit,
+        budgetFallbackModel: state.budgetFallbackModel,
+        safeMode: state.safeMode,
+        dna: state.dna,
+        // autopilotActive and providerCallLog intentionally NOT persisted
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(toSave, null, 2), 'utf8');
     // Also save a timestamped copy if there are messages

@@ -1,7 +1,7 @@
 // src/providers/client.ts
 // Unified streaming + agent loop client for Ollama, Claude, OpenAI, Groq
 
-import { Provider, ProviderConfig, Message, ToolCall, PROVIDERS } from '../core/types.js';
+import { Provider, ProviderConfig, Message, ToolCall, ModelRouting, PROVIDERS } from '../core/types.js';
 
 export interface StreamChunk {
   type: 'text' | 'tool_call' | 'tool_result' | 'agent_step' | 'done' | 'error';
@@ -148,6 +148,24 @@ export interface AgentConfig {
   onToolCall: (toolCall: ToolCall, step: number) => Promise<{ allowed: boolean; allowAll: boolean }>;
   onToolResult: (toolCall: ToolCall, result: string, diff?: unknown) => void;
   executeTool: (toolCall: ToolCall) => Promise<{ success: boolean; output: string; diff?: unknown }>;
+  routing?: ModelRouting | null;  // optional per-step model routing
+}
+
+/**
+ * Resolve which model to use for a given step number.
+ * planning = step 0, review = last step, execution = everything in between.
+ */
+export function resolveModelForStep(
+  step: number,
+  maxSteps: number,
+  routing: ModelRouting | null | undefined,
+  defaultModel: string,
+): string {
+  if (!routing) return defaultModel;
+  if (step === 0 && routing.planning)            return routing.planning;
+  if (step >= maxSteps - 1 && routing.review)    return routing.review;
+  if (routing.execution)                          return routing.execution;
+  return defaultModel;
 }
 
 // ─── Ollama agent ─────────────────────────────────────────────────────────────
@@ -178,13 +196,14 @@ async function runOllamaAgent(
   }));
 
   for (let step = 0; step < agentCfg.maxSteps; step++) {
+    const stepModel = resolveModelForStep(step, agentCfg.maxSteps, agentCfg.routing, model);
     if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
     await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
 
     const res = await fetch(`${config.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: history, stream: true, tools }),
+      body: JSON.stringify({ model: stepModel, messages: history, stream: true, tools }),
       signal,
     });
 
@@ -281,6 +300,7 @@ async function runClaudeAgent(
   });
 
   for (let step = 0; step < agentCfg.maxSteps; step++) {
+    const stepModel = resolveModelForStep(step, agentCfg.maxSteps, agentCfg.routing, model);
     if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
     await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
 
@@ -292,7 +312,7 @@ async function runClaudeAgent(
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model,
+        model: stepModel,
         max_tokens: 8096,
         system: systemPrompt,
         messages: history,
@@ -364,7 +384,7 @@ async function runClaudeAgent(
     }
     history.push({ role: 'assistant', content: assistantContent });
 
-    if (!toolUses.length || stopReason === 'end_turn') { await onChunk({ type: 'done' }); return; }
+    if (!toolUses.length) { await onChunk({ type: 'done' }); return; }
 
     const toolResults: unknown[] = [];
     for (const tu of toolUses) {
@@ -432,13 +452,14 @@ async function runOpenAIAgent(
   }
 
   for (let step = 0; step < agentCfg.maxSteps; step++) {
+    const stepModel = resolveModelForStep(step, agentCfg.maxSteps, agentCfg.routing, model);
     if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
     await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
 
     const res = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
+      body: JSON.stringify({ model: stepModel, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
       signal,
     });
 

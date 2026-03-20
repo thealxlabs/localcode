@@ -47,7 +47,7 @@ export function Setup({ onComplete }) {
             model: defaultModel,
             messages: [],
             checkpoints: [],
-            approvalMode: 'suggest',
+            approvalMode: 'auto-edit',
             workingDir: process.cwd(),
             apiKeys: finalKey ? { [finalProvider]: finalKey } : {},
             systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -59,6 +59,13 @@ export function Setup({ onComplete }) {
             sessionCost: 0,
             lastAssistantMessage: '',
             theme: 'dark',
+            modelRouting: null,
+            budgetLimit: null,
+            budgetFallbackModel: null,
+            safeMode: false,
+            autopilotActive: false,
+            providerCallLog: [],
+            dna: null,
         };
         if (process.env.ANTHROPIC_API_KEY)
             session.apiKeys.claude = process.env.ANTHROPIC_API_KEY;

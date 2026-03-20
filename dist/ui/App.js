@@ -20,7 +20,10 @@ import { ToolExecutor } from '../tools/executor.js';
 import { McpManager } from '../mcp/manager.js';
 import { saveSession, createCheckpoint, restoreCheckpoint, estimateTokens, loadNyxMemories, loadHooks, saveHistory, loadHistory, loadTemplates, saveTemplates, loadAliases, saveAliases, listSessions, loadSessionById, } from '../sessions/manager.js';
 import { loadPlugins } from '../plugins/loader.js';
-import { buildIndex, search as tfidfSearch } from '../search/tfidf.js';
+import { buildIndex, searchWithContext } from '../search/tfidf.js';
+import { runSwarm } from '../agents/swarm.js';
+import { detectTestCommand, runTestLoop } from '../agents/testloop.js';
+import { runBenchmark, buildTargets } from '../agents/benchmark.js';
 // ─── Spinner ──────────────────────────────────────────────────────────────────
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 export function App({ initialState }) {
@@ -55,6 +58,9 @@ export function App({ initialState }) {
     const watchFileRef = useRef(null);
     const lastUserMsgRef = useRef('');
     const searchIndexRef = useRef(null);
+    // v4 refs
+    const autopilotWatcherRef = useRef(null);
+    const safeStashRef = useRef(null); // stash name when safeMode active
     // Derive current theme
     const theme = THEMES[session.theme ?? 'dark'];
     // ── Mount effects ─────────────────────────────────────────────────────────────
@@ -215,13 +221,25 @@ export function App({ initialState }) {
         // Abort controller — cancelled by Escape key
         const controller = new AbortController();
         abortRef.current = controller;
-        // Snapshot session for this run
-        const currentSession = session;
+        // Snapshot session for this run (may be mutated below for budget switching)
+        let currentSession = session;
+        // ── Budget guard ─────────────────────────────────────────────────────────
+        if (currentSession.budgetLimit !== null && currentSession.sessionCost >= currentSession.budgetLimit) {
+            const fallback = currentSession.budgetFallbackModel ?? PROVIDERS.ollama.defaultModel;
+            sysMsg(`⚠  Budget $${currentSession.budgetLimit.toFixed(2)} reached ($${currentSession.sessionCost.toFixed(4)} spent). Switching to Ollama / ${fallback}.`);
+            const budgetSession = { ...currentSession, provider: 'ollama', model: fallback };
+            setSession(budgetSession);
+            currentSession = budgetSession;
+        }
         const run = async () => {
             const pinnedMsg = currentSession.pinnedContext.length
                 ? [{ role: 'user', content: `[Pinned context — always relevant]\n${currentSession.pinnedContext.join('\n')}` }]
                 : [];
-            const msgs = [...pinnedMsg, ...currentSession.messages, userMsg];
+            // Inject DNA if set
+            const dnaMsg = currentSession.dna
+                ? [{ role: 'user', content: `[Codebase DNA — your coding style guide]\n${currentSession.dna}` }]
+                : [];
+            const msgs = [...pinnedMsg, ...dnaMsg, ...currentSession.messages, userMsg];
             // Merge built-in tools with MCP tools
             const mcpToolDefs = mcpRef.current.getToolDefinitions();
             const allTools = [...BUILTIN_TOOLS, ...mcpToolDefs];
@@ -289,6 +307,15 @@ export function App({ initialState }) {
                                     lastAssistantMessage: accumulated,
                                     sessionCost: s.sessionCost + cost,
                                     checkpoints,
+                                    providerCallLog: [
+                                        ...s.providerCallLog,
+                                        {
+                                            provider: currentSession.provider,
+                                            model: currentSession.model,
+                                            estimatedTokens: inputTokens + outputTokens,
+                                            timestamp: Date.now(),
+                                        },
+                                    ],
                                 };
                                 setTimeout(() => { try {
                                     saveSession(next);
@@ -307,7 +334,21 @@ export function App({ initialState }) {
             }, {
                 maxSteps: currentSession.maxSteps,
                 tools: allTools,
+                routing: currentSession.modelRouting,
                 onToolCall: async (toolCall) => {
+                    // ── Safe mode: stash before first risky write ───────────────────
+                    const riskyTools = new Set(['write_file', 'patch_file', 'delete_file', 'run_shell']);
+                    if (currentSession.safeMode && !safeStashRef.current && riskyTools.has(toolCall.name)) {
+                        const stashName = `nyx-safe-${Date.now()}`;
+                        const stashRes = await executorRef.current.execute({
+                            name: 'git_operation',
+                            args: { args: `stash push -m "${stashName}"` },
+                        });
+                        if (stashRes.success) {
+                            safeStashRef.current = stashName;
+                            sysMsg(`⊛  Safe mode: stashed current changes as "${stashName}"`);
+                        }
+                    }
                     if (needsApproval(toolCall, currentSession.approvalMode)) {
                         setMood('waiting');
                         const perm = await requestPermission(toolCall);
@@ -351,6 +392,24 @@ export function App({ initialState }) {
         };
         try {
             await run();
+            // ── Safe mode: post-run test check ──────────────────────────────────
+            if (currentSession.safeMode && safeStashRef.current) {
+                const testCmd = await detectTestCommand(currentSession.workingDir);
+                if (testCmd) {
+                    sysMsg(`⊛  Safe mode: running ${testCmd} to verify changes…`);
+                    const { passed, output } = await import('../agents/testloop.js').then((m) => m.runTests(testCmd, currentSession.workingDir));
+                    if (!passed) {
+                        sysMsg(`⊛  Tests failed after changes. Reverting to stash "${safeStashRef.current}".`, true);
+                        await executorRef.current.execute({ name: 'git_operation', args: { args: 'checkout .' } });
+                        await executorRef.current.execute({ name: 'git_operation', args: { args: 'stash pop' } });
+                        sysMsg(`⊛  Reverted. Test output:\n${output.slice(0, 500)}`);
+                    }
+                    else {
+                        sysMsg(`⊛  Safe mode: tests passed. Changes kept.`);
+                    }
+                    safeStashRef.current = null;
+                }
+            }
         }
         catch (err) {
             updateDisplay(streamId, {
@@ -1423,13 +1482,18 @@ ${msgHtml}
                 }
                 // Use TF-IDF if indexed
                 if (searchIndexRef.current) {
-                    sysMsg(`Searching (TF-IDF) for "${args}"…`);
-                    const results = tfidfSearch(args, searchIndexRef.current, 10);
+                    sysMsg(`Searching (TF-IDF + context) for "${args}"…`);
+                    const results = searchWithContext(args, searchIndexRef.current, 10, 2);
                     if (!results.length) {
                         sysMsg(`No results for: ${args}`);
                         return;
                     }
-                    const list = results.map((r, i) => `  ${i + 1}. ${r.filePath.replace(session.workingDir + '/', '')}  (score: ${r.score.toFixed(3)})\n     ${r.snippet}`).join('\n');
+                    const list = results.map((r, i) => {
+                        const rel = r.filePath.replace(session.workingDir + '/', '');
+                        const band = r.relevance === 'high' ? '[high]' : r.relevance === 'medium' ? '[med] ' : '[low] ';
+                        const ctxLines = r.matchingLines.slice(0, 4).map((l) => `       ${String(l.lineNumber).padStart(4)}: ${l.text.trim().slice(0, 90)}`).join('\n');
+                        return `  ${i + 1}. ${band} ${rel}  (${r.score.toFixed(3)})\n${ctxLines || `       ${r.snippet}`}`;
+                    }).join('\n');
                     sysMsg(`TF-IDF results for "${args}":\n${list}`);
                     return;
                 }
@@ -1740,6 +1804,327 @@ ${msgHtml}
                 }
                 catch { /* exit regardless */ }
                 exit();
+                return;
+            }
+            // ──────────────────────────────────────────────────────────────────────
+            // v4: NUCLEAR FEATURES
+            // ──────────────────────────────────────────────────────────────────────
+            case '/budget': {
+                if (!args || args === '') {
+                    const limit = session.budgetLimit !== null ? `$${session.budgetLimit.toFixed(2)}` : 'none';
+                    const fallback = session.budgetFallbackModel ?? PROVIDERS.ollama.defaultModel;
+                    sysMsg(`Budget: limit=${limit}  spent=$${session.sessionCost.toFixed(4)}  fallback=${fallback}\nUsage: /budget 5.00 [fallback-model]  |  /budget off`);
+                    return;
+                }
+                if (args === 'off') {
+                    setSession((s) => ({ ...s, budgetLimit: null, budgetFallbackModel: null }));
+                    sysMsg('Budget limit removed.');
+                    return;
+                }
+                const budgetParts = args.split(/\s+/);
+                const amount = parseFloat(budgetParts[0]);
+                if (isNaN(amount) || amount <= 0) {
+                    sysMsg('Usage: /budget <amount> [fallback-model]', true);
+                    return;
+                }
+                const fallbackModel = budgetParts[1] ?? PROVIDERS.ollama.defaultModel;
+                setSession((s) => ({ ...s, budgetLimit: amount, budgetFallbackModel: fallbackModel }));
+                sysMsg(`Budget set: $${amount.toFixed(2)} — will switch to ${fallbackModel} when reached.`);
+                return;
+            }
+            case '/routing': {
+                if (!args || args === '') {
+                    const r = session.modelRouting;
+                    if (!r) {
+                        sysMsg('No routing configured. Usage: /routing planning=<model> execution=<model> review=<model>  |  /routing clear');
+                        return;
+                    }
+                    sysMsg(`Routing: planning=${r.planning ?? '(default)'}  execution=${r.execution ?? '(default)'}  review=${r.review ?? '(default)'}`);
+                    return;
+                }
+                if (args === 'clear') {
+                    setSession((s) => ({ ...s, modelRouting: null }));
+                    sysMsg('Model routing cleared — using single model for all steps.');
+                    return;
+                }
+                const routing = { planning: null, execution: null, review: null };
+                for (const pair of args.split(/\s+/)) {
+                    const [k, v] = pair.split('=');
+                    if (k === 'planning' && v)
+                        routing.planning = v;
+                    else if (k === 'execution' && v)
+                        routing.execution = v;
+                    else if (k === 'review' && v)
+                        routing.review = v;
+                }
+                setSession((s) => ({ ...s, modelRouting: routing }));
+                sysMsg(`Routing configured: planning=${routing.planning ?? '(default)'}  execution=${routing.execution ?? '(default)'}  review=${routing.review ?? '(default)'}`);
+                return;
+            }
+            case '/safe': {
+                const safeArg = args.toLowerCase();
+                const newSafe = safeArg === 'on' ? true : safeArg === 'off' ? false : !session.safeMode;
+                setSession((s) => ({ ...s, safeMode: newSafe }));
+                sysMsg(newSafe
+                    ? '⊛  Safe mode ON — changes will be stashed before edits; reverted if tests fail.'
+                    : '⊛  Safe mode OFF.');
+                return;
+            }
+            case '/dna': {
+                sysMsg('⌬  Analyzing git history to extract your coding DNA…');
+                setMood('thinking');
+                try {
+                    const gitLog = await new Promise((res) => {
+                        execFile('git', ['log', '-p', '--no-merges', '--since=90 days ago', '--', '*.ts', '*.tsx', '*.js', '*.py', '*.go', '*.rs'], { cwd: session.workingDir, timeout: 15000 }, (err, out) => res(err ? '' : out.slice(0, 14000)));
+                    });
+                    if (!gitLog.trim()) {
+                        sysMsg('⌬  Not enough git history to extract DNA. Make some commits first.', true);
+                        setMood('idle');
+                        return;
+                    }
+                    const prompt = `Analyze this git diff history. Extract and summarize in a short markdown section (200 words max) the coding style patterns to give an AI coding assistant:\n- Naming conventions (variables, functions, files)\n- Comment style and density\n- Preferred patterns and idioms\n- Error handling approach\n- Test structure\n\nGit history:\n\`\`\`\n${gitLog}\n\`\`\`\n\nRespond with ONLY the markdown section, no preamble.`;
+                    let dnaText = '';
+                    const dnaId = addDisplay({ role: 'assistant', content: '', streaming: true });
+                    await streamProvider(session.provider, session.apiKeys, session.model, [{ role: 'user', content: prompt }], (c) => { if (c.text) {
+                        dnaText += c.text;
+                        updateDisplay(dnaId, { content: dnaText, streaming: true });
+                    } });
+                    updateDisplay(dnaId, { content: dnaText, streaming: false });
+                    setSession((s) => ({ ...s, dna: dnaText, pinnedContext: [`[Codebase DNA]\n${dnaText}`, ...s.pinnedContext.filter((p) => !p.startsWith('[Codebase DNA]'))] }));
+                    sysMsg('⌬  DNA extracted and pinned to context. Nyx will now match your coding style.');
+                }
+                catch (err) {
+                    sysMsg(`⌬  DNA failed: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
+                setMood('idle');
+                return;
+            }
+            case '/chaos': {
+                sysMsg('⚡  Chaos mode activated. Nyx will hunt for improvements unsolicited…');
+                const chaosPersona = session.personas.find((p) => p.name === 'chaos-refactor');
+                const chaosPrompt = chaosPersona?.prompt ?? '';
+                await sendMessage(`${chaosPrompt}\n\nBegin your sweep of the codebase at: ${session.workingDir}`);
+                return;
+            }
+            case '/evolve': {
+                if (session.messages.length < 4) {
+                    sysMsg('Need at least a few messages to evolve from.', true);
+                    return;
+                }
+                sysMsg('↑  Analyzing session to extract learnings for .nyx.md…');
+                setMood('thinking');
+                const lastMsgs = session.messages.slice(-30).map((m) => `${m.role}: ${m.content.slice(0, 400)}`).join('\n\n');
+                const evolvePrompt = `You are reviewing a coding assistant session. Identify patterns to remember:\n1. What approaches worked well and should be repeated\n2. What the user had to correct (anti-patterns to avoid)\n3. Project-specific conventions discovered\n\nOutput ONLY a concise markdown section (max 150 words) to append to a .nyx.md config file. Start with "## Evolved — ${new Date().toISOString().slice(0, 10)}"\n\nSession:\n${lastMsgs}`;
+                let evolved = '';
+                await streamProvider(session.provider, session.apiKeys, session.model, [{ role: 'user', content: evolvePrompt }], (c) => { if (c.text)
+                    evolved += c.text; });
+                if (evolved.trim()) {
+                    const nyxPath = path.join(session.workingDir, '.nyx.md');
+                    const existing = fs.existsSync(nyxPath) ? fs.readFileSync(nyxPath, 'utf8') : '';
+                    fs.writeFileSync(nyxPath, `${existing}\n\n${evolved.trim()}\n`, 'utf8');
+                    sysMsg(`↑  Appended learnings to .nyx.md`);
+                    addDisplay({ role: 'assistant', content: evolved.trim(), streaming: false });
+                }
+                setMood('idle');
+                return;
+            }
+            case '/swarm': {
+                if (!args) {
+                    sysMsg('Usage: /swarm "task description" [N]  (N defaults to 3)', true);
+                    return;
+                }
+                const swarmMatch = args.match(/^"([^"]+)"\s*(\d+)?$/) ?? args.match(/^(.+?)\s+(\d+)?$/);
+                const swarmTask = swarmMatch?.[1]?.trim() ?? args;
+                const swarmN = parseInt(swarmMatch?.[2] ?? '3', 10);
+                sysMsg(`⇶  Spawning swarm of ${swarmN} parallel agents for: "${swarmTask}"`);
+                setMood('thinking');
+                setIsStreaming(true);
+                try {
+                    const results = await runSwarm(swarmTask, swarmN, {
+                        provider: session.provider, apiKeys: session.apiKeys, model: session.model,
+                        systemPrompt: session.systemPrompt, workingDir: session.workingDir,
+                        maxStepsPerAgent: Math.ceil(session.maxSteps / swarmN),
+                        onProgress: (t) => sysMsg(`⇶  Agent ${t.index + 1} done in ${(t.durationMs / 1000).toFixed(1)}s${t.error ? ' (error)' : ''}`),
+                    });
+                    const summary = results.map((r, i) => `### Agent ${i + 1}: ${r.subtask}\n${r.error ? `Error: ${r.error}` : r.output.slice(0, 500)}`).join('\n\n---\n\n');
+                    addDisplay({ role: 'assistant', content: `## Swarm Complete\n\n${summary}`, streaming: false });
+                }
+                catch (err) {
+                    sysMsg(`Swarm error: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
+                finally {
+                    setIsStreaming(false);
+                    setMood('idle');
+                }
+                return;
+            }
+            case '/test-loop': {
+                const maxIter = parseInt(args || '5', 10);
+                const testCmd = await detectTestCommand(session.workingDir);
+                if (!testCmd) {
+                    sysMsg('Could not detect test runner. Supported: npm test, vitest, jest, pytest, cargo test, go test.', true);
+                    return;
+                }
+                sysMsg(`↻  Fix-until-green loop (max ${maxIter} iterations) using: ${testCmd}`);
+                setMood('thinking');
+                setIsStreaming(true);
+                try {
+                    const { passed, iterations } = await runTestLoop(testCmd, {
+                        cwd: session.workingDir,
+                        maxIterations: maxIter,
+                        onIteration: (iter) => {
+                            const icon = iter.passed ? '✓' : '✗';
+                            sysMsg(`↻  Iteration ${iter.iteration}: ${icon} ${iter.passed ? 'PASS' : 'FAIL'} (${(iter.durationMs / 1000).toFixed(1)}s)`);
+                        },
+                    }, async (failures, iter) => {
+                        await sendMessage(`Tests failed (iteration ${iter}). Fix the failures:\n\n${failures.slice(0, 3000)}`);
+                    });
+                    sysMsg(passed ? `✓  All tests passing after ${iterations} iteration${iterations > 1 ? 's' : ''}!` : `✗  Tests still failing after ${maxIter} iterations. Use /test-loop <N> with a higher number.`);
+                }
+                catch (err) {
+                    sysMsg(`test-loop error: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
+                finally {
+                    setIsStreaming(false);
+                    setMood('idle');
+                }
+                return;
+            }
+            case '/autopilot': {
+                const apArg = args.toLowerCase();
+                if (apArg === 'off' || (apArg === '' && session.autopilotActive)) {
+                    autopilotWatcherRef.current?.close();
+                    autopilotWatcherRef.current = null;
+                    setSession((s) => ({ ...s, autopilotActive: false }));
+                    sysMsg('⬡  Autopilot stopped.');
+                    return;
+                }
+                if (session.autopilotActive) {
+                    sysMsg('⬡  Autopilot already running. Use /autopilot off to stop.');
+                    return;
+                }
+                const apTestCmd = await detectTestCommand(session.workingDir);
+                sysMsg(`⬡  Autopilot started. Watching ${session.workingDir} for changes${apTestCmd ? `, running: ${apTestCmd}` : ' (no test runner found, will commit on any change)'}…`);
+                setSession((s) => ({ ...s, autopilotActive: true }));
+                let apDebounce = null;
+                autopilotWatcherRef.current = fs.watch(session.workingDir, { recursive: true }, (_event, filename) => {
+                    if (!filename || filename.includes('.git') || filename.includes('node_modules'))
+                        return;
+                    if (apDebounce)
+                        clearTimeout(apDebounce);
+                    apDebounce = setTimeout(async () => {
+                        try {
+                            let shouldCommit = true;
+                            if (apTestCmd) {
+                                const { passed } = await import('../agents/testloop.js').then((m) => m.runTests(apTestCmd, session.workingDir));
+                                shouldCommit = passed;
+                                if (!passed) {
+                                    sysMsg(`⬡  Autopilot: ${filename} changed, tests failed — not committing.`);
+                                    return;
+                                }
+                            }
+                            if (shouldCommit) {
+                                const ts = new Date().toISOString().slice(0, 19).replace('T', ' ');
+                                await executorRef.current.execute({ name: 'git_operation', args: { args: 'add -A' } });
+                                const commitRes = await executorRef.current.execute({ name: 'git_operation', args: { args: `commit -m "autopilot: ${ts} — ${filename}"` } });
+                                if (commitRes.success)
+                                    sysMsg(`⬡  Autopilot: committed changes triggered by ${filename}`);
+                            }
+                        }
+                        catch { /* non-critical */ }
+                    }, 2000);
+                });
+                return;
+            }
+            case '/benchmark': {
+                if (!args) {
+                    sysMsg('Usage: /benchmark "prompt to test across all providers"', true);
+                    return;
+                }
+                const benchPrompt = args.replace(/^"|"$/g, '');
+                const targets = buildTargets(session.apiKeys);
+                if (targets.length === 0) {
+                    sysMsg('No providers configured. Set API keys with /apikey first.', true);
+                    return;
+                }
+                sysMsg(`⊞  Benchmarking "${benchPrompt.slice(0, 60)}…" across ${targets.length} provider(s)…`);
+                setMood('thinking');
+                setIsStreaming(true);
+                const benchResults = [];
+                try {
+                    await runBenchmark(benchPrompt, targets, session.apiKeys, (r) => {
+                        benchResults.push({ provider: r.provider, model: r.model, latencyMs: r.latencyMs, cost: r.estimatedCostUSD, preview: r.response.slice(0, 200) });
+                        sysMsg(`⊞  ${r.provider}/${r.model}: ${(r.latencyMs / 1000).toFixed(2)}s  $${r.estimatedCostUSD.toFixed(5)}`);
+                    });
+                    const table = benchResults
+                        .sort((a, b) => a.latencyMs - b.latencyMs)
+                        .map((r, i) => `${i + 1}. **${r.provider}/${r.model}**  ${(r.latencyMs / 1000).toFixed(2)}s  $${r.cost.toFixed(5)}\n   > ${r.preview.replace(/\n/g, ' ').slice(0, 120)}`)
+                        .join('\n\n');
+                    addDisplay({ role: 'assistant', content: `## Benchmark Results\n\n${table}`, streaming: false });
+                }
+                catch (err) {
+                    sysMsg(`Benchmark error: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
+                finally {
+                    setIsStreaming(false);
+                    setMood('idle');
+                }
+                return;
+            }
+            case '/privacy': {
+                const log = session.providerCallLog;
+                if (log.length === 0) {
+                    sysMsg('No provider calls recorded this session.');
+                    return;
+                }
+                const byProvider = new Map();
+                for (const entry of log) {
+                    const key = `${entry.provider}/${entry.model}`;
+                    const cur = byProvider.get(key) ?? { calls: 0, tokens: 0, cost: 0 };
+                    byProvider.set(key, {
+                        calls: cur.calls + 1,
+                        tokens: cur.tokens + entry.estimatedTokens,
+                        cost: cur.cost + estimateCost(entry.model, Math.floor(entry.estimatedTokens * 0.7), Math.floor(entry.estimatedTokens * 0.3)),
+                    });
+                }
+                const local = new Set(['ollama']);
+                let report = `## Privacy Report — This Session\n\n`;
+                for (const [key, stats] of byProvider) {
+                    const isLocal = local.has(key.split('/')[0]);
+                    report += `**${key}** ${isLocal ? '🔒 local' : '☁ cloud'}\n`;
+                    report += `  Calls: ${stats.calls}  Tokens sent: ~${stats.tokens.toLocaleString()}  Est. cost: $${stats.cost.toFixed(5)}\n\n`;
+                }
+                const cloudKeys = [...byProvider.keys()].filter((k) => !local.has(k.split('/')[0]));
+                if (cloudKeys.length === 0) {
+                    report += `✓ All requests stayed local this session.`;
+                }
+                else {
+                    report += `⚠  ${cloudKeys.length} cloud provider(s) received data: ${cloudKeys.join(', ')}`;
+                }
+                addDisplay({ role: 'assistant', content: report, streaming: false });
+                return;
+            }
+            case '/share-state': {
+                const stateExport = {
+                    version: pkg.version,
+                    exportedAt: new Date().toISOString(),
+                    provider: session.provider,
+                    model: session.model,
+                    messages: session.messages,
+                    checkpoints: session.checkpoints,
+                    pinnedContext: session.pinnedContext,
+                    systemPrompt: session.systemPrompt,
+                    activePersona: session.activePersona,
+                    workingDir: session.workingDir,
+                };
+                const outFile = args ? path.resolve(session.workingDir, args.endsWith('.json') ? args : `${args}.json`) : path.join(session.workingDir, `nyx-session-${Date.now()}.json`);
+                try {
+                    fs.writeFileSync(outFile, JSON.stringify(stateExport, null, 2), 'utf8');
+                    sysMsg(`Session exported to ${outFile}. Share this file — recipient runs /share-state import <file> to restore.`);
+                }
+                catch (err) {
+                    sysMsg(`Export failed: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
                 return;
             }
             default:

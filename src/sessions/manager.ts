@@ -158,7 +158,7 @@ export function loadSession(): SessionState {
     model: PROVIDERS.ollama.defaultModel,
     messages: [],
     checkpoints: [],
-    approvalMode: 'suggest',
+    approvalMode: 'auto-edit',
     workingDir: process.cwd(),
     apiKeys,
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -170,6 +170,14 @@ export function loadSession(): SessionState {
     sessionCost: 0,
     lastAssistantMessage: '',
     theme: 'dark',
+    // v4 defaults
+    modelRouting: null,
+    budgetLimit: null,
+    budgetFallbackModel: null,
+    safeMode: false,
+    autopilotActive: false,
+    providerCallLog: [],
+    dna: null,
   };
 
   if (!fs.existsSync(STATE_FILE)) return defaults;
@@ -193,19 +201,26 @@ export function loadSession(): SessionState {
 export function saveSession(state: SessionState): void {
   ensureDir();
   const toSave: Partial<SessionState> = {
-    provider:       state.provider,
-    model:          state.model,
-    checkpoints:    state.checkpoints,
-    approvalMode:   state.approvalMode,
-    workingDir:     state.workingDir,
-    apiKeys:        state.apiKeys,
-    systemPrompt:   state.systemPrompt,
-    personas:       state.personas,
-    activePersona:  state.activePersona,
-    pinnedContext:  state.pinnedContext,
-    autoCheckpoint: state.autoCheckpoint,
-    maxSteps:       state.maxSteps,
-    theme:          state.theme,
+    provider:             state.provider,
+    model:                state.model,
+    checkpoints:          state.checkpoints,
+    approvalMode:         state.approvalMode,
+    workingDir:           state.workingDir,
+    apiKeys:              state.apiKeys,
+    systemPrompt:         state.systemPrompt,
+    personas:             state.personas,
+    activePersona:        state.activePersona,
+    pinnedContext:        state.pinnedContext,
+    autoCheckpoint:       state.autoCheckpoint,
+    maxSteps:             state.maxSteps,
+    theme:                state.theme,
+    // v4 — persisted
+    modelRouting:         state.modelRouting,
+    budgetLimit:          state.budgetLimit,
+    budgetFallbackModel:  state.budgetFallbackModel,
+    safeMode:             state.safeMode,
+    dna:                  state.dna,
+    // autopilotActive and providerCallLog intentionally NOT persisted
   };
   fs.writeFileSync(STATE_FILE, JSON.stringify(toSave, null, 2), 'utf8');
 
