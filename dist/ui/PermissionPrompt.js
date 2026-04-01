@@ -1,5 +1,4 @@
 // src/ui/PermissionPrompt.tsx
-// Claude Code-style permission prompt before destructive tool calls
 import React from 'react';
 import { Box, Text } from 'ink';
 const TOOL_DESCRIPTIONS = {

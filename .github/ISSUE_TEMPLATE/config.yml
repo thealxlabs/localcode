@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Discord Community
+    url: https://discord.gg/localcode
+    about: Ask questions and discuss with the community
+  - name: Documentation
+    url: https://github.com/thealxlabs/localcode#readme
+    about: Check the README for setup and usage guides

@@ -1,340 +1,534 @@
-# LocalCode v3
+# Localcode
 
-**Local-first, open-source AI coding assistant for your terminal.**
-Supports Ollama (free, fully local), Claude, OpenAI, and Groq — with a rich TUI inspired by Claude Code.
+> The open-source AI coding agent that runs locally. 139 specialized agents, multi-agent orchestration, full tool execution, and VS Code integration.
 
-![LocalCode demo](demo.gif)
+<div align="center">
 
-[![npm version](https://img.shields.io/npm/v/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
-[![npm downloads](https://img.shields.io/npm/dm/@localcode/cli.svg?style=flat-square)](https://www.npmjs.com/package/@localcode/cli)
-[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/LocalCodeByTheAlxLabs.localcode.svg?style=flat-square&label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=LocalCodeByTheAlxLabs.localcode)
-[![GitHub stars](https://img.shields.io/github/stars/TheLocalCodeTeam/localcode.svg?style=flat-square)](https://github.com/TheLocalCodeTeam/localcode/stargazers)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Build](https://github.com/thealxlabs/localcode/actions/workflows/ci.yml/badge.svg)](https://github.com/thealxlabs/localcode/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@localcode/cli.svg)](https://www.npmjs.com/package/@localcode/cli)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18.0-green.svg)](https://nodejs.org/)
+[![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension-007ACC.svg)](https://marketplace.visualstudio.com/items?itemName=thealxlabs.localcode)
 
-```
- /\_/\   LocalCode  v3.1.0  ·  open source
-( ·.· )  provider  Ollama  qwen2.5-coder:7b
- > ♥ <   cwd       ~/my-project
-         tokens    0  ░░░░░░░░░░  0%
+</div>
+
+---
+
+## Table of Contents
+
+- [What is Localcode?](#what-is-localcode)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Providers](#providers)
+- [Agents](#agents)
+- [Commands](#commands)
+- [Tools](#tools)
+- [Multi-Agent Orchestration](#multi-agent-orchestration)
+- [VS Code Extension](#vs-code-extension)
+- [Settings](#settings)
+- [Plugins](#plugins)
+- [MCP Servers](#mcp-servers)
+- [Memory System](#memory-system)
+- [Git Integration](#git-integration)
+- [Hooks](#hooks)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+---
+
+## What is Localcode?
+
+Localcode is a full-featured AI coding agent that runs in your terminal. It connects to any LLM provider (local or cloud), reads your codebase, edits files, runs commands, and iterates until the job is done. It comes with **139 specialized agents** across engineering, design, testing, security, DevOps, and more — each with deep domain expertise.
+
+Unlike cloud-only coding assistants, Localcode:
+- **Runs locally** with Ollama — your code never leaves your machine
+- **Auto-dispatches agents** based on task context — no manual switching
+- **Orchestrates multi-agent pipelines** with quality gates and retries
+- **Integrates with VS Code** — chat panel, inline edits, completions
+- **Supports any provider** — Ollama, OpenAI, Anthropic, Groq, OpenRouter, custom
+
+## Features
+
+### Core
+- **Real agent loop** — reads files, edits, runs tests, iterates automatically
+- **10 built-in tools** — read/write/patch/delete/move files, shell, search, find, list, git
+- **@-mentions** — inject file context inline with `@file.ts`
+- **Permission system** — ask/allow/deny per tool and command pattern
+- **Checkpoints** — auto-save session state every 20 messages
+- **Model routing** — use different models for planning, execution, and review
+- **Budget guard** — auto-switches to local model when budget is hit
+- **Safe mode** — git stash before edits, auto-revert on test failure
+
+### Agents
+- **139 specialized agents** — engineering, design, testing, security, DevOps, marketing, product, and more
+- **Auto-dispatch** — agents activate automatically based on task keywords (configurable)
+- **Multi-agent orchestration** — NEXUS pipeline with 7 phases, quality gates, and Dev↔QA loops
+- **Agent picker** — search and activate any agent with `/agent`
+
+### IDE Integration
+- **VS Code extension** — chat panel, agent view, session stats, inline edits, completions
+- **14 commands** — chat, inline edit, generate, explain, fix, review, test, commit, and more
+- **Keybindings** — `Cmd+L` for chat, `Cmd+K` for inline edit, `Cmd+Shift+A` for agents
+- **Status bar** — live status, token count, cost estimate, active agent
+
+### Extensibility
+- **Plugins** — drop `.js` files in `~/.localcode/plugins/` to add custom commands
+- **MCP servers** — connect external tools via Model Context Protocol
+- **Hooks** — PreToolUse and PostToolUse hooks for custom logic
+- **Custom agents** — add your own agents in `~/.localcode/agents/`
+
+---
+
+## Quick Start
+
+```bash
+# Install
+npm install -g @localcode/cli
+
+# Run with Ollama (local, no API key needed)
+localcode
+
+# Run with a specific provider
+localcode --provider openai --model gpt-4o
+localcode --provider claude --model claude-sonnet-4-20250514
+localcode --provider groq --model llama-3.3-70b-versatile
+
+# Auto-accept tool calls (hands-free mode)
+localcode --yes
+
+# Set a working directory
+localcode /path/to/project
 ```
 
 ---
 
-## Install
+## Installation
 
-**One-liner:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/TheLocalCodeTeam/localcode/main/install.sh | sh
-```
+### Prerequisites
 
-**npm:**
+- **Node.js** 18.0 or later
+- **Ollama** (optional, for local models) — [ollama.com](https://ollama.com)
+
+### Install from npm
+
 ```bash
 npm install -g @localcode/cli
-localcode
 ```
 
-**Run without installing:**
-```bash
-npx @localcode/cli
-```
+### Install from source
 
-**VS Code extension:** search `LocalCode` in the Extensions panel, or [install from Marketplace](https://marketplace.visualstudio.com/items?itemName=LocalCodeByTheAlxLabs.localcode).
-
-**Build from source:**
 ```bash
-git clone https://github.com/TheLocalCodeTeam/localcode.git
+git clone https://github.com/thealxlabs/localcode.git
 cd localcode
-npm install && npm run build
+npm install
+npm run build
 npm link
 ```
+
+### Install VS Code extension
+
+```bash
+cd extensions/vscode
+npm install
+npm run compile
+npm run package
+code --install-extension localcode-4.0.0.vsix
+```
+
+---
+
+## Configuration
+
+Localcode uses `~/.localcode/settings.json` for global config and `.localcode/settings.json` for project-specific config.
+
+```json
+{
+  "provider": {
+    "provider": "ollama",
+    "model": "qwen2.5-coder:7b",
+    "baseUrl": "http://localhost:11434",
+    "temperature": 0.3,
+    "maxTokens": 8192
+  },
+  "agentDispatch": {
+    "enabled": true,
+    "requireApproval": false,
+    "maxConcurrentAgents": 5,
+    "dispatchStrategy": "smart",
+    "qualityGate": true,
+    "maxRetries": 3
+  },
+  "permissions": {
+    "fileEdit": "allow",
+    "fileWrite": "allow",
+    "bash": "allow"
+  },
+  "session": {
+    "autoSave": true,
+    "autoCompact": true,
+    "compactThreshold": 50
+  },
+  "git": {
+    "enabled": true,
+    "autoCommit": false,
+    "autoStash": false
+  },
+  "memory": {
+    "enabled": true,
+    "autoExtract": true,
+    "persistentMemory": true
+  }
+}
+```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `OPENAI_API_KEY` | OpenAI API key (auto-loaded) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (auto-loaded) |
+| `GROQ_API_KEY` | Groq API key (auto-loaded) |
+| `LOCALCODE_PROVIDER` | Default provider override |
+| `LOCALCODE_MODEL` | Default model override |
+| `LOCALCODE_WORKDIR` | Default working directory |
 
 ---
 
 ## Providers
 
-| Provider | Requires Key | Default Model | Notes |
-|---|---|---|---|
-| **Ollama** | No | `qwen2.5-coder:7b` | Free, fully local |
-| **Claude** | Yes | `claude-sonnet-4-5` | Best model quality |
-| **OpenAI** | Yes | `gpt-4o` | Strong general coding |
-| **Groq** | Yes | `llama-3.3-70b-versatile` | Very fast inference |
+Localcode supports any OpenAI-compatible API endpoint.
 
-### API Key Setup
+| Provider | Setup | Local? |
+|----------|-------|--------|
+| **Ollama** | `localcode --provider ollama` | Yes |
+| **OpenAI** | Set `OPENAI_API_KEY` | Cloud |
+| **Anthropic** | Set `ANTHROPIC_API_KEY` | Cloud |
+| **Groq** | Set `GROQ_API_KEY` | Cloud |
+| **OpenRouter** | Set `OPENROUTER_API_KEY` | Cloud |
+| **Custom** | Set `baseUrl` in settings | Depends |
 
-```bash
-# Environment variables (recommended)
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
-export GROQ_API_KEY=gsk_...
-
-# Or inside the app
-/apikey sk-ant-...
+Switch providers mid-session:
+```
+/provider ollama
+/provider openai
+/provider claude
+/provider groq
 ```
 
 ---
 
-## Features
+## Agents
 
-### Multi-provider with live switching
-Switch providers and models at runtime — no restart needed.
-```
-/provider claude       → switch to Claude
-/model claude-opus-4-6 → change model instantly
-```
+Localcode comes with **139 specialized agents** organized by division:
 
-### Fully local with Ollama
-Run 100% offline and free. Install [Ollama](https://ollama.com), pull a model, and go:
-```bash
-ollama pull qwen2.5-coder:7b
-localcode
-```
+### Engineering (30+ agents)
+- **AI Engineer** — ML model integration, training pipelines
+- **Senior Developer** — Complex feature implementation, architecture decisions
+- **Software Architect** — System design, microservices, scalability
+- **Backend Architect** — API design, database optimization, server architecture
+- **Frontend Developer** — React, Vue, Angular, CSS, responsive design
+- **Database Optimizer** — Query optimization, indexing, schema design
 
-### Agent loop with tool use
-Nyx (the AI assistant) can read, write, patch, delete, and move files, run shell commands, search codebases, and operate git — all in an autonomous agent loop.
+### Testing (10+ agents)
+- **API Tester** — Endpoint testing, contract validation
+- **Test Results Analyzer** — Test output parsing, failure triage
+- **Reality Checker** — Verify assumptions, validate implementations
 
-Built-in tools:
-- `read_file` / `write_file` / `patch_file` / `delete_file` / `move_file`
-- `list_dir` — list directory tree
-- `search_files` — grep-style search across codebase
-- `find_files` — find files by name pattern
-- `run_shell` — execute shell commands
-- `git_operation` — run git commands
+### Security (8+ agents)
+- **Security Engineer** — Vulnerability assessment, secure coding
+- **Threat Detection** — Attack surface analysis, exploit prevention
+- **Compliance Auditor** — Regulatory compliance, security standards
 
-### Approval modes
-Control how much the agent can do autonomously:
+### DevOps & Infrastructure (10+ agents)
+- **DevOps Automator** — CI/CD pipelines, containerization
+- **SRE** — Site reliability, monitoring, incident response
+- **Infrastructure Maintainer** — Cloud infrastructure, scaling
 
-| Mode | Behavior |
-|---|---|
-| `suggest` (default) | Prompt before every file write, delete, or shell command |
-| `auto-edit` | File edits auto-approved; only shell commands need approval |
-| `full-auto` | Everything runs without prompting |
+### Design, Marketing, Product, and more
+
+### Using Agents
 
 ```
-/mode auto-edit
-/allowall        <- cycles through modes
+/agent                    # Browse and activate agents (interactive picker)
+/agent ai-engineer        # Activate a specific agent
+/agents                   # List all agents by category
+/agents security          # Search agents by keyword
 ```
 
-### Rich slash command system
-Type `/` to open the searchable command picker. All commands:
+### Auto-Dispatch
 
-**Session**
+Agents are automatically dispatched based on task context. No permission needed by default (configurable in settings).
+
+```
+User: "Fix the authentication bug"
+→ Auto-dispatches: security-engineer, backend-architect, testing-reality-checker
+
+User: "Optimize the database queries"
+→ Auto-dispatches: database-optimizer, performance-benchmarker
+```
+
+---
+
+## Commands
+
+Type `/` to see all available commands. Key commands:
+
 | Command | Description |
-|---|---|
+|---------|-------------|
+| `/help` | Show command picker |
 | `/clear` | Clear conversation |
-| `/compact` | Summarize & compress conversation |
-| `/checkpoint [label]` | Save a checkpoint |
-| `/restore [id]` | Restore a checkpoint |
-| `/retry` | Regenerate last response |
-| `/copy` | Copy last response to clipboard |
-| `/export [name]` | Export conversation to markdown |
-| `/undo` | Undo last file change |
-| `/status` | Show session info |
-| `/exit` | Save and exit |
-
-**Agent Control**
-| Command | Description |
-|---|---|
-| `/mode <mode>` | Set approval mode |
-| `/allowall` | Cycle approval mode |
-| `/steps <n>` | Set max agent steps (default: 20) |
-
-**Context & Memory**
-| Command | Description |
-|---|---|
-| `/context <path>` | Add file or directory to context |
-| `/pin <text>` | Pin text that persists through `/compact` |
-| `/unpin [n]` | Remove pinned context |
-| `/web <query>` | Search the web and inject results |
-| `/todo` | Extract todo list from conversation |
-| `/open <file>` | Open file in `$EDITOR` |
-| `/diff [file]` | Show unified diff of session changes |
-
-**System & Personas**
-| Command | Description |
-|---|---|
-| `/sys [prompt]` | View or set the system prompt |
-| `/persona [name]` | Switch AI persona |
-
-Built-in personas: `pair-programmer`, `senior-engineer`, `rubber-duck`, `code-reviewer`, `minimal`
-
-**Git**
-| Command | Description |
-|---|---|
-| `/commit` | AI-generated conventional commit |
-| `/review` | AI code review of staged/working changes |
-
-**Navigation (quick tools, no AI needed)**
-| Command | Description |
-|---|---|
-| `/cd <path>` | Change working directory |
-| `/ls [path]` | List directory |
-| `/search <pattern>` | Grep file contents |
-| `/find <pattern>` | Find files by name |
-
-**Providers & Models**
-| Command | Description |
-|---|---|
-| `/provider [name]` | Switch provider |
-| `/apikey <key>` | Set API key |
-| `/model <name>` | Change model |
-| `/models` | List available models |
-| `/cost` | Show estimated session cost |
-| `/ping` | Test provider connectivity and latency |
-
-**Tools & Diagnostics**
-| Command | Description |
-|---|---|
-| `/init` | Generate `.nyx.md` project config from codebase |
-| `/doctor` | Health check: Ollama, API keys, git, memory, MCP |
-| `/memory [edit]` | Show and manage `.nyx.md` memory files |
-| `/hooks` | Show configured hooks |
-| `/mcp <subcommand>` | Manage MCP servers |
+| `/model <name>` | Switch model |
+| `/provider <name>` | Switch provider |
+| `/agent` | Browse and activate agents |
+| `/agents` | List all agents |
+| `/orchestrate` | Run multi-agent pipeline |
+| `/nexus` | Full NEXUS pipeline |
+| `/swarm <n>` | Parallel agent swarm |
+| `/test-loop` | Auto-fix failing tests |
+| `/benchmark` | Run build/test benchmarks |
+| `/commit` | Generate commit message |
+| `/diff` | Show unstaged changes |
+| `/checkpoint` | Save session checkpoint |
+| `/persona <name>` | Switch persona |
+| `/theme <name>` | Switch theme |
+| `/settings` | Show current settings |
+| `/privacy` | Show provider usage report |
+| `/search <pattern>` | Search file contents |
+| `/ping` | Test provider connectivity |
 
 ---
 
-## Keyboard Shortcuts
+## Tools
 
-| Shortcut | Action |
-|---|---|
-| `Up` / `Down` | Navigate input history |
-| `Escape` | Cancel in-flight AI request |
-| `Ctrl+E` | Toggle multiline input mode |
-| `Ctrl+D` | Submit multiline input |
-| `Ctrl+C` | Save session and exit |
-| `/` | Open command picker |
+Localcode has 10 built-in tools that the agent uses autonomously:
 
----
-
-## Context Injection
-
-Inject file or directory content inline in any message using `@`:
-
-```
-What's wrong with @src/app.ts?
-Summarize the structure of @src/
-```
-
-Or use the slash command:
-```
-/context src/utils/
-```
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents with line numbers |
+| `write_file` | Create or overwrite a file |
+| `patch_file` | Edit part of a file (old_str → new_str) |
+| `delete_file` | Delete a file |
+| `move_file` | Move/rename a file |
+| `run_shell` | Run any shell command |
+| `list_dir` | List directory contents (recursive) |
+| `search_files` | Grep-like search across the project |
+| `find_files` | Find files by name pattern |
+| `git_operation` | Run git commands |
 
 ---
 
-## Memory Files (`.nyx.md`)
+## Multi-Agent Orchestration
 
-Nyx loads memory files at startup and prepends them to every request:
+### NEXUS Pipeline
 
-| File | Scope |
-|---|---|
-| `~/.nyx.md` | Global — always loaded |
-| `<project>/.nyx.md` | Project — loaded when cwd matches |
+The NEXUS system coordinates multiple agents through a structured pipeline:
 
-Generate a project memory file automatically:
 ```
-/init
+/nexus "build a SaaS platform" full
 ```
 
-Edit your global memory:
+**Full Mode** (7 phases):
+1. **Discovery** — Requirements gathering, competitive analysis
+2. **Strategy** — Architecture decisions, technology selection
+3. **Foundation** — Project scaffolding, CI/CD setup
+4. **Build** — Core implementation with parallel agents
+5. **Hardening** — Security audit, performance optimization, testing
+6. **Launch** — Deployment, documentation, monitoring
+7. **Operate** — Ongoing maintenance, incident response
+
+**Sprint Mode** (4 phases): Strategy → Foundation → Build → Hardening
+
+**Micro Mode** (1 phase): Build only
+
+### Orchestration
+
 ```
-/memory edit
+/orchestrate "refactor the auth system" sprint
+/orchestrate "add dark mode" micro
 ```
+
+Features:
+- **Quality gates** between each phase
+- **Dev↔QA loops** for all implementation tasks
+- **Parallel execution** with configurable batch sizes
+- **Automatic retries** for failed tasks
+- **Synthesis** of all agent outputs into a coherent result
+
+---
+
+## VS Code Extension
+
+The VS Code extension provides:
+
+### Views
+- **Chat Panel** — Full conversation interface with streaming
+- **Agent View** — Browse and activate 139 agents
+- **Session View** — Live stats (tokens, cost, duration)
+
+### Commands
+- `Cmd+L` — Open chat
+- `Cmd+K` — Inline edit (select code, describe changes)
+- `Cmd+Shift+A` — Activate agent
+
+### Right-Click Menu
+- Inline Edit, Generate Code, Explain Code, Fix Issues, Review Code, Generate Tests
+
+### Status Bar
+- Live status indicator, token count, cost estimate, active agent
+
+---
+
+## Settings
+
+All settings are configurable via:
+- `~/.localcode/settings.json` (global)
+- `.localcode/settings.json` (project)
+- VS Code Settings UI (`@ext:thealxlabs.localcode`)
+
+See [Configuration](#configuration) for the full schema.
+
+---
+
+## Plugins
+
+Create custom commands by dropping `.js` files in `~/.localcode/plugins/`:
+
+```javascript
+export default {
+  name: 'my-plugin',
+  trigger: '/mycommand',
+  description: 'Does something useful',
+  async execute(args, context) {
+    context.addDisplay({ role: 'assistant', content: `Hello ${args}!` });
+  }
+};
+```
+
+---
+
+## MCP Servers
+
+Connect external tools via Model Context Protocol:
+
+```json
+{
+  "mcp": {
+    "enabled": true,
+    "servers": {
+      "filesystem": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
+      }
+    }
+  }
+}
+```
+
+---
+
+## Memory System
+
+Localcode maintains persistent memory across sessions:
+
+- **Global memory** — `~/.localcode.md` — Always loaded
+- **Project memory** — `<project>/.localcode.md` — Loaded when cwd matches
+- **Auto-extraction** — Patterns, conventions, and style guides are automatically extracted from your code
+
+---
+
+## Git Integration
+
+```
+/commit              # Generate commit message from diff
+/diff                # Show unstaged changes
+/blame <file>        # Show git blame
+/log                 # Show recent commits
+/branch              # List branches
+```
+
+**Safe Mode**: Enable `safeMode: true` in settings to automatically stash before edits and revert if tests fail.
 
 ---
 
 ## Hooks
 
-Run shell commands before/after tool calls using `~/.localcode/hooks.json`:
+Custom logic that runs before/after tool use:
 
 ```json
 {
-  "PreToolUse": [
-    { "matcher": "write_file", "command": "echo 'Writing $LC_TOOL_PATH'" }
-  ],
-  "PostToolUse": [
-    { "matcher": "write_file", "command": "prettier --write \"$LC_TOOL_PATH\" 2>/dev/null" }
-  ],
-  "Notification": [
-    { "command": "say done" }
-  ]
+  "PreToolUse": [{
+    "matcher": "run_shell",
+    "hooks": [{ "type": "command", "command": "echo 'Running: $COMMAND'" }]
+  }],
+  "PostToolUse": [{
+    "matcher": "write_file",
+    "hooks": [{ "type": "command", "command": "prettier --write $FILE_PATH" }]
+  }]
 }
 ```
-
-**Environment variables available in hooks:**
-- `LC_TOOL_NAME` — name of the tool called
-- `LC_TOOL_ARGS` — JSON args
-- `LC_TOOL_OUTPUT` — tool output (PostToolUse only)
-- `LC_TOOL_PATH` — file path arg if applicable
-
----
-
-## MCP (Model Context Protocol)
-
-Connect external tool servers via [MCP](https://modelcontextprotocol.io):
-
-```
-/mcp add my-server stdio npx -y @my-org/mcp-server
-/mcp add my-api http https://api.example.com/mcp
-/mcp list
-/mcp tools
-```
-
----
-
-## Multiline Input
-
-For large prompts, code pastes, or long instructions:
-
-1. `Ctrl+E` — enter multiline mode (numbered line editor)
-2. `Enter` — add a new line
-3. `Ctrl+D` — submit
-4. `Ctrl+E` again — cancel and discard
-
----
-
-## Auto-save
-
-Session state is saved automatically after each AI response and on exit to `~/.localcode/session.json`. Persisted settings:
-
-- Provider and model
-- API keys
-- Approval mode
-- Max agent steps
-- System prompt and persona
-- Pinned context
-- Checkpoints
-
----
-
-## Security
-
-- **Path traversal protection** — all file operations are sandboxed to the working directory
-- **No `exec()` with user input** — all subprocess calls use `execFile()` to prevent shell injection
-- **Shell commands require approval** — in `suggest` mode, `run_shell` and `git_operation` always prompt
 
 ---
 
 ## Architecture
 
 ```
-src/
-  bin/localcode.tsx       Entry point
-  core/types.ts           Types, slash commands, providers config
-  ui/
-    App.tsx               Main TUI — state, commands, input handling
-    NyxHeader.tsx         Header with token bar, mood, provider
-    MarkdownText.tsx      Terminal markdown renderer
-    CommandPicker.tsx     Fuzzy slash command picker
-    PermissionPrompt.tsx  Approval UI
-    Setup.tsx             First-run setup wizard
-  tools/executor.ts       Built-in tool implementations
-  providers/client.ts     Multi-provider agent loop (Ollama, Claude, OpenAI)
-  sessions/manager.ts     Session persistence, hooks, memory
-  mcp/manager.js          MCP server connections
+localcode/
+├── src/
+│   ├── bin/localcode.tsx          # CLI entry point
+│   ├── core/types.ts              # Core types, themes, commands
+│   ├── providers/client.ts        # LLM provider abstraction
+│   ├── tools/executor.ts          # Tool execution engine
+│   ├── agents/                    # Agent system
+│   │   ├── registry/              # Agent loading & discovery
+│   │   ├── orchestrator.ts        # Multi-agent orchestration
+│   │   ├── autoDispatch.ts        # Automatic agent dispatch
+│   │   ├── swarm.ts               # Parallel agent swarm
+│   │   └── testloop.ts            # Auto-fix failing tests
+│   ├── sessions/manager.ts        # Session persistence, checkpoints
+│   ├── mcp/manager.ts             # MCP server management
+│   ├── plugins/loader.ts          # Plugin loading
+│   ├── search/tfidf.js            # TF-IDF search
+│   ├── settings/                  # Settings system
+│   └── ui/                        # Terminal UI
+│       ├── App.tsx                # Main TUI component
+│       ├── CommandPicker.tsx      # Command palette
+│       ├── AgentPicker.tsx        # Agent browser
+│       └── ...
+├── extensions/vscode/             # VS Code extension
+├── .github/                       # GitHub workflows & templates
+├── dist/                          # Compiled output
+└── package.json
 ```
+
+---
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for our security policy.
+
+To report a vulnerability, email security@thealxlabs.com.
 
 ---
 
 ## License
 
-MIT — [TheAlxLabs](https://github.com/thealxlabs)
+MIT — See [LICENSE](LICENSE) for details.
+
+Built with by [TheAlxLabs](https://github.com/thealxlabs)

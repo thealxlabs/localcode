@@ -1,0 +1,70 @@
+name: Bug Report
+description: File a bug report
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: input
+    id: version
+    attributes:
+      label: Localcode Version
+      description: What version of Localcode are you running?
+      placeholder: v4.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      description: Which provider are you using?
+      options:
+        - Ollama
+        - OpenAI
+        - Anthropic
+        - Groq
+        - OpenRouter
+        - Custom
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Which model are you using?
+      placeholder: qwen2.5-coder:7b
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS are you using?
+      placeholder: macOS 14.0 / Ubuntu 22.04 / Windows 11
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Also tell us what you expected to happen.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Run `localcode`
+        2. Type `/model xyz`
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: Copy and paste any relevant log output.
+      render: shell

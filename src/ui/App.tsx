@@ -1,5 +1,4 @@
 // src/ui/App.tsx
-// Main TUI application — Claude Code inspired
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
@@ -57,6 +56,10 @@ import { buildIndex, searchWithContext, SearchIndex } from '../search/tfidf.js';
 import { runSwarm } from '../agents/swarm.js';
 import { detectTestCommand, runTestLoop } from '../agents/testloop.js';
 import { runBenchmark, buildTargets } from '../agents/benchmark.js';
+import { getAgentRegistry, reloadAgentRegistry } from '../agents/registry/loader.js';
+import { getOrchestrator } from '../agents/orchestrator.js';
+import type { AgentDefinition } from '../agents/registry/types.js';
+import { AgentPicker } from './AgentPicker.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,6 +102,10 @@ export function App({ initialState }: AppProps): React.ReactElement {
   const [showPicker, setShowPicker] = useState(false);
   const [pickerQuery, setPickerQuery] = useState('');
   const [pickerSelectedIndex, setPickerSelectedIndex] = useState(0);
+  const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [agentPickerQuery, setAgentPickerQuery] = useState('');
+  const [agentPickerSelectedIndex, setAgentPickerSelectedIndex] = useState(0);
+  const [activeAgent, setActiveAgent] = useState<AgentDefinition | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -2239,6 +2246,139 @@ ${msgHtml}
         return;
       }
 
+      case '/agent': {
+        if (!args) {
+          setShowAgentPicker(true);
+          setAgentPickerQuery('');
+          setAgentPickerSelectedIndex(0);
+          setInput('/agent ');
+          return;
+        }
+        const registry = getAgentRegistry();
+        const agent = registry.getAgent(args.toLowerCase().replace(/[^a-z0-9-]/g, '')) ||
+          registry.searchAgents(args)[0];
+        if (!agent) {
+          sysMsg(`Agent not found: "${args}". Use /agents to list all available agents.`, true);
+          return;
+        }
+        setActiveAgent(agent);
+        const enhancedPrompt = `${session.systemPrompt}\n\n---\nActive Agent: ${agent.name}\n${agent.vibe ? `Vibe: ${agent.vibe}\n` : ''}${agent.prompt}`;
+        setSession((s) => ({ ...s, systemPrompt: enhancedPrompt }));
+        sysMsg(`🤖 Agent activated: ${agent.emoji || '🤖'} ${agent.name}\n${agent.description}\n${agent.vibe ? `Vibe: ${agent.vibe}` : ''}`);
+        return;
+      }
+
+      case '/agents': {
+        const registry = getAgentRegistry();
+        if (args) {
+          const filtered = registry.searchAgents(args);
+          if (!filtered.length) {
+            sysMsg(`No agents found matching "${args}".`, true);
+            return;
+          }
+          const list = filtered.map((a) => `  ${a.emoji || '🤖'} ${a.name.padEnd(30)} ${a.description.slice(0, 50)}`).join('\n');
+          sysMsg(`Agents matching "${args}" (${filtered.length}):\n${list}\n\nUse /agent <name> to activate.`);
+          return;
+        }
+        let report = `🤖 Available Agents (${registry.allAgents.length} total):\n\n`;
+        for (const cat of registry.categories) {
+          if (cat.agents.length === 0) continue;
+          report += `${cat.emoji} ${cat.name.toUpperCase()} (${cat.agents.length}):\n`;
+          for (const agent of cat.agents.slice(0, 10)) {
+            report += `  ${agent.emoji || '🤖'} ${agent.name.padEnd(30)} ${agent.description.slice(0, 40)}\n`;
+          }
+          if (cat.agents.length > 10) report += `  ... and ${cat.agents.length - 10} more\n`;
+          report += '\n';
+        }
+        report += 'Use /agent <name> to activate an agent.\nUse /agents <query> to search.';
+        addDisplay({ role: 'assistant', content: report, streaming: false });
+        return;
+      }
+
+      case '/orchestrate': {
+        const parts = args.split(/\s+/);
+        const task = parts.slice(0, -1).join(' ') || args;
+        const mode = (parts[parts.length - 1]?.toLowerCase() || 'sprint') as 'full' | 'sprint' | 'micro';
+        const orchestrator = getOrchestrator();
+        const agents = orchestrator.getAvailableAgents();
+        const primaryAgent = agents.find(a => a.id.includes('architect') || a.id.includes('senior')) || agents[0];
+        const supportingAgents = agents.slice(1, 6).map(a => a.id);
+
+        sysMsg(`🎛️ Starting NEXUS ${mode.toUpperCase()} orchestration...\nTask: ${task}\nPrimary Agent: ${primaryAgent?.name}\nSupporting: ${supportingAgents.length} agents`);
+
+        orchestrator.runOrchestration({
+          mode,
+          primaryAgent: primaryAgent?.id || 'unknown',
+          supportingAgents,
+          maxRetries: 3,
+          qualityGates: true,
+        }, task, session.provider, session.apiKeys, session.model, session.workingDir, session.systemPrompt, session.maxSteps).then((state) => {
+          const status = `🎛️ Orchestration ${state.qualityGatePassed ? '✅ COMPLETE' : '⚠️ NEEDS WORK'}\nPhase: ${state.phase}\nCompleted: ${state.completedTasks.length}\nFailed: ${state.failedTasks.length}\nDuration: ${((Date.now() - state.startTime) / 1000).toFixed(1)}s`;
+          sysMsg(status);
+
+          // Show synthesis if available
+          const synthesis = state.completedTasks.find(t => t.agentId === 'synthesis');
+          if (synthesis) {
+            addDisplay({ role: 'assistant', content: `## 🎛️ NEXUS Synthesis\n\n${synthesis.output}`, streaming: false });
+          }
+
+          // Show all task results
+          for (const t of state.completedTasks.filter(t => t.agentId !== 'synthesis')) {
+            addDisplay({
+              role: 'assistant',
+              content: `## ${t.agentName}\n\n${t.output.slice(0, 2000)}${t.output.length > 2000 ? '\n\n... (truncated)' : ''}`,
+              streaming: false,
+            });
+          }
+        }).catch((err) => {
+          sysMsg(`Orchestration failed: ${err instanceof Error ? err.message : String(err)}`, true);
+        });
+        return;
+      }
+
+      case '/nexus': {
+        const parts = args.split(/\s+/);
+        const task = parts.slice(0, -1).join(' ') || args;
+        const mode = (parts[parts.length - 1]?.toLowerCase() || 'full') as 'full' | 'sprint' | 'micro';
+        const orchestrator = getOrchestrator();
+        const allAgents = orchestrator.getAvailableAgents();
+
+        const phases = mode === 'full'
+          ? ['Phase 0: Discovery', 'Phase 1: Strategy', 'Phase 2: Foundation', 'Phase 3: Build', 'Phase 4: Hardening', 'Phase 5: Launch', 'Phase 6: Operate']
+          : mode === 'sprint'
+          ? ['Phase 1: Strategy', 'Phase 2: Foundation', 'Phase 3: Build', 'Phase 4: Hardening']
+          : ['Phase 3: Build'];
+
+        let report = `🌐 NEXUS ${mode.toUpperCase()} Pipeline Activated\n\n`;
+        report += `Task: ${task}\n`;
+        report += `Phases: ${phases.length}\n`;
+        report += `Available Agents: ${allAgents.length}\n\n`;
+        report += `Pipeline:\n`;
+        for (let i = 0; i < phases.length; i++) {
+          report += `  ${i + 1}. ${phases[i]}\n`;
+        }
+        report += `\nQuality gates enforced between each phase.\nDev↔QA loops running for all implementation tasks.\n`;
+        addDisplay({ role: 'assistant', content: report, streaming: false });
+
+        orchestrator.runOrchestration({
+          mode,
+          primaryAgent: allAgents.find(a => a.id.includes('orchestrator'))?.id || allAgents[0]?.id || 'unknown',
+          supportingAgents: allAgents.slice(0, 6).map(a => a.id),
+          maxRetries: 3,
+          qualityGates: true,
+        }, task, session.provider, session.apiKeys, session.model, session.workingDir, session.systemPrompt, session.maxSteps).then((state) => {
+          const status = `🌐 NEXUS Pipeline ${state.qualityGatePassed ? '✅ COMPLETE' : '⚠️ NEEDS WORK'}\nPhase: ${state.phase}\nCompleted: ${state.completedTasks.length}\nFailed: ${state.failedTasks.length}\nDuration: ${((Date.now() - state.startTime) / 1000).toFixed(1)}s`;
+          sysMsg(status);
+          const synthesis = state.completedTasks.find(t => t.agentId === 'synthesis');
+          if (synthesis) {
+            addDisplay({ role: 'assistant', content: `## 🌐 NEXUS Synthesis\n\n${synthesis.output}`, streaming: false });
+          }
+        }).catch((err) => {
+          sysMsg(`NEXUS pipeline failed: ${err instanceof Error ? err.message : String(err)}`, true);
+        });
+        return;
+      }
+
       default:
         sysMsg(`Unknown command: ${cmd}. Type / to see all commands.`, true);
     }
@@ -2249,14 +2389,23 @@ ${msgHtml}
   const handleInputChange = useCallback((val: string): void => {
     setInput(val);
 
-    if (val.startsWith('/')) {
-      const query = val.slice(1); // empty string when just "/"
+    if (val.startsWith('/agent ')) {
+      const query = val.slice(7);
+      setAgentPickerQuery(query);
+      setShowAgentPicker(true);
+      setShowPicker(false);
+      setAgentPickerSelectedIndex(0);
+    } else if (val.startsWith('/')) {
+      const query = val.slice(1);
       setPickerQuery(query);
       setShowPicker(true);
+      setShowAgentPicker(false);
       setPickerSelectedIndex(0);
     } else {
       setShowPicker(false);
+      setShowAgentPicker(false);
       setPickerQuery('');
+      setAgentPickerQuery('');
     }
   }, []);
 
@@ -2457,6 +2606,28 @@ ${msgHtml}
           onDismiss={() => { setShowPicker(false); setInput(''); }}
         />
       )}
+
+      {/* Agent picker */}
+      {showAgentPicker && (() => {
+        const registry = getAgentRegistry();
+        return (
+          <AgentPicker
+            categories={registry.categories}
+            allAgents={registry.allAgents}
+            query={agentPickerQuery}
+            selectedIndex={agentPickerSelectedIndex}
+            onSelect={(agent) => {
+              setActiveAgent(agent);
+              const enhancedPrompt = `${session.systemPrompt}\n\n---\nActive Agent: ${agent.name}\n${agent.vibe ? `Vibe: ${agent.vibe}\n` : ''}${agent.prompt}`;
+              setSession((s) => ({ ...s, systemPrompt: enhancedPrompt }));
+              setShowAgentPicker(false);
+              setInput('');
+              sysMsg(`🤖 Agent activated: ${agent.emoji || '🤖'} ${agent.name}\n${agent.description}`);
+            }}
+            onDismiss={() => { setShowAgentPicker(false); setInput(''); }}
+          />
+        );
+      })()}
 
       {/* Input area */}
       <Box

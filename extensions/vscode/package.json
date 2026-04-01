@@ -1,0 +1,394 @@
+{
+  "name": "localcode",
+  "displayName": "Localcode — AI Coding Agent",
+  "description": "Full-featured AI coding agent with 139+ specialized agents, multi-agent orchestration, and local LLM support. Works like Claude Code but better.",
+  "version": "4.0.0",
+  "publisher": "thealxlabs",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:localcode.chat",
+    "onCommand:localcode.inlineEdit",
+    "onCommand:localcode.generate",
+    "onCommand:localcode.explain",
+    "onCommand:localcode.fix",
+    "onCommand:localcode.review",
+    "onCommand:localcode.test",
+    "onCommand:localcode.commit",
+    "onCommand:localcode.agent",
+    "onCommand:localcode.orchestrate",
+    "onCommand:localcode.settings",
+    "onView:localcode.chatView",
+    "onView:localcode.agentView",
+    "onView:localcode.sessionView",
+    "onLanguage"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "localcode.chat",
+        "title": "Localcode: Open Chat",
+        "icon": "$(comment-discussion)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.inlineEdit",
+        "title": "Localcode: Inline Edit",
+        "icon": "$(sparkle)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.generate",
+        "title": "Localcode: Generate Code",
+        "icon": "$(lightbulb)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.explain",
+        "title": "Localcode: Explain Code",
+        "icon": "$(info)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.fix",
+        "title": "Localcode: Fix Issues",
+        "icon": "$(wrench)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.review",
+        "title": "Localcode: Review Code",
+        "icon": "$(check)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.test",
+        "title": "Localcode: Generate Tests",
+        "icon": "$(beaker)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.commit",
+        "title": "Localcode: Generate Commit Message",
+        "icon": "$(git-commit)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.agent",
+        "title": "Localcode: Activate Agent",
+        "icon": "$(robot)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.orchestrate",
+        "title": "Localcode: Run Multi-Agent Pipeline",
+        "icon": "$(run-all)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.settings",
+        "title": "Localcode: Settings",
+        "icon": "$(gear)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.toggleAutoDispatch",
+        "title": "Localcode: Toggle Auto Agent Dispatch",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.clearSession",
+        "title": "Localcode: Clear Session",
+        "icon": "$(clear-all)",
+        "category": "Localcode"
+      },
+      {
+        "command": "localcode.showSessionStats",
+        "title": "Localcode: Show Session Stats",
+        "category": "Localcode"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "localcode",
+          "title": "Localcode",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "localcode": [
+        {
+          "type": "webview",
+          "id": "localcode.chatView",
+          "name": "Chat"
+        },
+        {
+          "type": "webview",
+          "id": "localcode.agentView",
+          "name": "Agents"
+        },
+        {
+          "type": "webview",
+          "id": "localcode.sessionView",
+          "name": "Session"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "localcode.inlineEdit",
+          "group": "localcode@1"
+        },
+        {
+          "command": "localcode.explain",
+          "group": "localcode@2"
+        },
+        {
+          "command": "localcode.fix",
+          "group": "localcode@3"
+        },
+        {
+          "command": "localcode.review",
+          "group": "localcode@4"
+        },
+        {
+          "command": "localcode.generate",
+          "group": "localcode@5"
+        },
+        {
+          "command": "localcode.test",
+          "group": "localcode@6"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "localcode.chat",
+          "group": "navigation",
+          "when": "editorTextFocus"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "localcode.commit",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "localcode.clearSession",
+          "when": "view == localcode.chatView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "localcode.chat",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "localcode.inlineEdit",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "localcode.agent",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Localcode",
+      "properties": {
+        "localcode.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": ["ollama", "openai", "anthropic", "groq", "openrouter", "custom"],
+          "description": "AI provider to use"
+        },
+        "localcode.model": {
+          "type": "string",
+          "default": "qwen2.5-coder:7b",
+          "description": "Model to use for the AI agent"
+        },
+        "localcode.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the selected provider"
+        },
+        "localcode.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Base URL for the API (for Ollama or custom providers)"
+        },
+        "localcode.temperature": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for model responses (0 = deterministic, 1 = creative)"
+        },
+        "localcode.maxTokens": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum tokens per response"
+        },
+        "localcode.autoDispatch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically dispatch specialized agents based on task context"
+        },
+        "localcode.autoDispatchRequireApproval": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require user approval before dispatching agents"
+        },
+        "localcode.maxConcurrentAgents": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum number of concurrent agents"
+        },
+        "localcode.budgetLimit": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum USD spend per session before auto-switching to local model"
+        },
+        "localcode.qualityGate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable quality gates between agent pipeline phases"
+        },
+        "localcode.maxRetries": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Maximum retry attempts for failed agent tasks"
+        },
+        "localcode.permissionFileEdit": {
+          "type": "string",
+          "default": "allow",
+          "enum": ["ask", "allow", "deny"],
+          "description": "Permission mode for file edits"
+        },
+        "localcode.permissionBash": {
+          "type": "string",
+          "default": "allow",
+          "enum": ["ask", "allow", "deny"],
+          "description": "Permission mode for bash commands"
+        },
+        "localcode.autoSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-save session state"
+        },
+        "localcode.autoCompact": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-compact conversation when it gets too long"
+        },
+        "localcode.compactThreshold": {
+          "type": "number",
+          "default": 50,
+          "description": "Number of messages before auto-compaction"
+        },
+        "localcode.gitAutoCommit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-commit changes after agent completes"
+        },
+        "localcode.gitAutoStash": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-stash before making changes (safe mode)"
+        },
+        "localcode.memoryEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable persistent memory across sessions"
+        },
+        "localcode.memoryAutoExtract": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-extract project conventions and patterns"
+        },
+        "localcode.showAgentStatus": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show agent status in the status bar"
+        },
+        "localcode.showTokenCount": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show token count in the status bar"
+        },
+        "localcode.showCostEstimate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show cost estimate in the status bar"
+        },
+        "localcode.mcpEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable MCP server support"
+        },
+        "localcode.mcpServers": {
+          "type": "object",
+          "default": {},
+          "description": "MCP server configurations"
+        },
+        "localcode.customAgents": {
+          "type": "array",
+          "default": [],
+          "description": "Paths to custom agent definition files"
+        },
+        "localcode.theme": {
+          "type": "string",
+          "default": "vscode",
+          "enum": ["vscode", "dark", "light", "monokai", "nord"],
+          "description": "Chat UI theme"
+        },
+        "localcode.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": ["debug", "info", "warn", "error"],
+          "description": "Logging verbosity level"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.24.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "ws": "^8.16.0"
+  }
+}

@@ -31,7 +31,6 @@ export async function runSwarm(
   n: number,
   opts: SwarmOptions,
 ): Promise<SwarmTask[]> {
-  // Step 1: decompose the task into N subtasks
   const decomposePrompt =
     `Decompose the following task into exactly ${n} independent subtasks that can be worked on in parallel.\n` +
     `Each subtask should be self-contained and actionable.\n` +
@@ -47,19 +46,16 @@ export async function runSwarm(
     opts.systemPrompt,
   );
 
-  // Extract JSON array from response
   try {
     const match = raw.match(/\[[\s\S]*\]/);
     if (match) subtasks = JSON.parse(match[0]) as string[];
   } catch { /* fall back */ }
 
   if (!subtasks.length || subtasks.length < 2) {
-    // Fallback: split by newline or just use the original
     subtasks = raw.split('\n').map((l) => l.replace(/^[\d.\-\s]+/, '').trim()).filter(Boolean).slice(0, n);
     if (!subtasks.length) subtasks = [task];
   }
 
-  // Step 2: run each subtask in parallel with an independent ToolExecutor
   const results = await Promise.all(
     subtasks.map(async (subtask, index): Promise<SwarmTask> => {
       const start = Date.now();

@@ -1,0 +1,27 @@
+name: Security Report
+description: Report a security vulnerability
+title: "security: "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please do NOT report security vulnerabilities through public GitHub issues.**
+        Send reports to security@thealxlabs.com for faster response.
+  - type: textarea
+    id: description
+    attributes:
+      label: Vulnerability Description
+      description: Describe the vulnerability and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: How can this vulnerability be reproduced?
+  - type: input
+    id: version
+    attributes:
+      label: Affected Version
+      placeholder: v4.0.0
