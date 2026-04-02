@@ -6,6 +6,7 @@ import { homedir } from 'os';
 import type { Settings } from './types.js';
 import { DEFAULT_SETTINGS } from './types.js';
 import { logger } from '../core/logger.js';
+import { migrateSettings } from './migrations.js';
 
 const GLOBAL_CONFIG_DIR = join(homedir(), '.localcode');
 const GLOBAL_SETTINGS_PATH = join(GLOBAL_CONFIG_DIR, 'settings.json');
@@ -52,7 +53,7 @@ export function loadSettings(): Settings {
   if (existsSync(GLOBAL_SETTINGS_PATH)) {
     try {
       const raw = JSON.parse(readFileSync(GLOBAL_SETTINGS_PATH, 'utf-8'));
-      settings = deepMerge(settings, validateSettings(raw)) as Settings;
+      settings = deepMerge(settings, migrateSettings(raw)) as Settings;
     } catch (err) {
       logger.warn('Corrupt global settings file, using defaults', { error: err instanceof Error ? err.message : String(err) });
     }
@@ -64,7 +65,7 @@ export function loadSettings(): Settings {
     if (existsSync(fullPath)) {
       try {
         const raw = JSON.parse(readFileSync(fullPath, 'utf-8'));
-        settings = deepMerge(settings, validateSettings(raw)) as Settings;
+        settings = deepMerge(settings, migrateSettings(raw)) as Settings;
         break;
       } catch {
         logger.warn('Corrupt project settings file, skipping', { path: fullPath });

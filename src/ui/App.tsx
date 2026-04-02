@@ -117,9 +117,15 @@ export function App({ initialState }: AppProps): React.ReactElement {
 
   // ── State ────────────────────────────────────────────────────────────────────
   const [session, setSession] = useState<SessionState>(initialState);
+  const sessionRef = useRef<SessionState>(initialState);
+
+  // Keep sessionRef in sync to avoid stale closures in callbacks
+  useEffect(() => { sessionRef.current = session; }, [session]);
+
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const lastSendTimeRef = useRef<number>(0);
   const [mood, setMood] = useState<NyxMood>('idle');
   const [showPicker, setShowPicker] = useState(false);
   const [pickerQuery, setPickerQuery] = useState('');
@@ -294,6 +300,10 @@ export function App({ initialState }: AppProps): React.ReactElement {
 
   const sendMessage = useCallback(async (text: string): Promise<void> => {
     if (!text.trim() || isStreaming) return;
+    // Rate limit: prevent double-send if user spams Enter
+    const now = Date.now();
+    if (now - lastSendTimeRef.current < 500) return;
+    lastSendTimeRef.current = now;
 
     // Add to history
     const newHistory = [text, ...history.slice(0, 199)];
@@ -339,7 +349,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
     abortRef.current = controller;
 
     // Snapshot session for this run (may be mutated below for budget switching)
-    let currentSession = session;
+    let currentSession = sessionRef.current;
 
     // ── Budget guard ─────────────────────────────────────────────────────────
     if (currentSession.budgetLimit !== null && currentSession.sessionCost >= currentSession.budgetLimit) {
@@ -1085,6 +1095,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
         const summaryMsg: Message = { role: 'system', content: `[Compacted conversation summary]\n${summary}` };
         setSession((s) => ({ ...s, messages: [summaryMsg] }));
         setDisplayMessages([]);
+        executorRef.current.clearSessionFiles();
         sysMsg(`Conversation compacted. Summary:\n${summary}`);
         setMood('idle');
         return;
@@ -1355,25 +1366,55 @@ ${msgHtml}
         sysMsg(`Searching: "${args}"…`);
         setMood('thinking');
         try {
-          const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(args)}`;
+          // Try multiple search engines with fallback
+          const searchUrls = [
+            `https://html.duckduckgo.com/html/?q=${encodeURIComponent(args)}`,
+            `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(args)}`,
+          ];
+
+          let text: string | null = null;
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 8000);
-          let text: string;
-          try {
-            const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: controller.signal });
-            if (!res.ok) {
-              sysMsg(`Web search failed: server returned ${res.status}`, true);
-              setMood('idle');
-              return;
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+          for (const url of searchUrls) {
+            try {
+              const res = await fetch(url, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+                signal: controller.signal,
+              });
+              if (res.ok) {
+                text = await res.text();
+                if (text && text.length > 100) break;
+              }
+            } catch {
+              // Try next URL
             }
-            text = await res.text();
-          } finally {
-            clearTimeout(timeoutId);
           }
-          // Extract visible text snippets from results
-          const snippets = [...text.matchAll(/class="result__snippet"[^>]*>([^<]{20,300})</g)]
-            .slice(0, 5)
-            .map((m, i) => `${i + 1}. ${m[1].replace(/&amp;/g,'&').replace(/&#x27;/g,"'").replace(/&quot;/g,'"').trim()}`);
+          clearTimeout(timeoutId);
+
+          if (!text) {
+            // Fallback: provide a helpful message instead of failing
+            sysMsg(`Web search unavailable. Consider using /context to add relevant files, or search manually and paste results.`);
+            setMood('idle');
+            return;
+          }
+
+          // Extract snippets with multiple patterns for resilience
+          const patterns = [
+            /class="result__snippet"[^>]*>([^<]{20,300})</g,
+            /class="result-snippet"[^>]*>([^<]{20,300})</g,
+            /<td[^>]*class="result-snippet"[^>]*>([^<]{20,300})</g,
+          ];
+
+          let snippets: string[] = [];
+          for (const pattern of patterns) {
+            const matches = [...text.matchAll(pattern)].slice(0, 5);
+            if (matches.length > 0) {
+              snippets = matches.map((m, i) => `${i + 1}. ${m[1].replace(/&amp;/g,'&').replace(/&#x27;/g,"'").replace(/&quot;/g,'"').replace(/<[^>]*>/g,'').trim()}`);
+              break;
+            }
+          }
+
           if (!snippets.length) {
             sysMsg('No results found. Try a different query.');
             setMood('idle');
@@ -1384,7 +1425,7 @@ ${msgHtml}
           setSession((s) => ({ ...s, messages: [...s.messages, webMsg] }));
           sysMsg(`Added ${snippets.length} search results to context.`);
         } catch {
-          sysMsg('Web search failed. Check your connection.', true);
+          sysMsg('Web search failed. Check your connection or try a different query.', true);
         }
         setMood('idle');
         return;
@@ -2327,6 +2368,8 @@ ${msgHtml}
         const supportingAgents = agents.slice(1, 6).map(a => a.id);
 
         sysMsg(`🎛️ Starting NEXUS ${mode.toUpperCase()} orchestration...\nTask: ${task}\nPrimary Agent: ${primaryAgent?.name}\nSupporting: ${supportingAgents.length} agents`);
+        setIsStreaming(true);
+        setMood('thinking');
 
         orchestrator.runOrchestration({
           mode,
@@ -2337,6 +2380,8 @@ ${msgHtml}
         }, task, session.provider, session.apiKeys, session.model, session.workingDir, session.systemPrompt, session.maxSteps).then((state) => {
           const status = `🎛️ Orchestration ${state.qualityGatePassed ? '✅ COMPLETE' : '⚠️ NEEDS WORK'}\nPhase: ${state.phase}\nCompleted: ${state.completedTasks.length}\nFailed: ${state.failedTasks.length}\nDuration: ${((Date.now() - state.startTime) / 1000).toFixed(1)}s`;
           sysMsg(status);
+          setIsStreaming(false);
+          setMood('idle');
 
           // Show synthesis if available
           const synthesis = state.completedTasks.find(t => t.agentId === 'synthesis');
@@ -2354,6 +2399,8 @@ ${msgHtml}
           }
         }).catch((err) => {
           sysMsg(`Orchestration failed: ${err instanceof Error ? err.message : String(err)}`, true);
+          setIsStreaming(false);
+          setMood('error');
         });
         return;
       }
@@ -2382,6 +2429,9 @@ ${msgHtml}
         report += `\nQuality gates enforced between each phase.\nDev↔QA loops running for all implementation tasks.\n`;
         addDisplay({ role: 'assistant', content: report, streaming: false });
 
+        setIsStreaming(true);
+        setMood('thinking');
+
         orchestrator.runOrchestration({
           mode,
           primaryAgent: allAgents.find(a => a.id.includes('orchestrator'))?.id || allAgents[0]?.id || 'unknown',
@@ -2391,12 +2441,16 @@ ${msgHtml}
         }, task, session.provider, session.apiKeys, session.model, session.workingDir, session.systemPrompt, session.maxSteps).then((state) => {
           const status = `🌐 NEXUS Pipeline ${state.qualityGatePassed ? '✅ COMPLETE' : '⚠️ NEEDS WORK'}\nPhase: ${state.phase}\nCompleted: ${state.completedTasks.length}\nFailed: ${state.failedTasks.length}\nDuration: ${((Date.now() - state.startTime) / 1000).toFixed(1)}s`;
           sysMsg(status);
+          setIsStreaming(false);
+          setMood('idle');
           const synthesis = state.completedTasks.find(t => t.agentId === 'synthesis');
           if (synthesis) {
             addDisplay({ role: 'assistant', content: `## 🌐 NEXUS Synthesis\n\n${synthesis.output}`, streaming: false });
           }
         }).catch((err) => {
           sysMsg(`NEXUS pipeline failed: ${err instanceof Error ? err.message : String(err)}`, true);
+          setIsStreaming(false);
+          setMood('error');
         });
         return;
       }

@@ -19,6 +19,9 @@ export declare class ToolExecutor {
     getSessionFiles(): Record<string, string>;
     undoLastChange(): string | null;
     unifiedDiff(filePath: string): string | null;
+    private computeLCS;
+    private computeLCSFallback;
+    private lcsToChanges;
     /**
      * Clear tracked session files to free memory.
      * Call this after a session is saved or compacted.

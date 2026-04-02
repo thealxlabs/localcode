@@ -303,27 +303,12 @@ export class ToolExecutor {
 
     const hunks: string[] = [`--- a/${relPath}`, `+++ b/${relPath}`];
 
-    // Simple unified diff: find changed regions with 3-line context
+    // Proper LCS-based diff
+    const lcs = this.computeLCS(beforeLines, afterLines);
+    const changes = this.lcsToChanges(beforeLines, afterLines, lcs);
+
+    // Group into hunks with 3 lines of context
     const CONTEXT = 3;
-    let i = 0;
-    let j = 0;
-    const changes: Array<{ type: '-' | '+' | ' '; line: string }> = [];
-
-    // LCS-lite: line by line comparison collecting changes
-    while (i < beforeLines.length || j < afterLines.length) {
-      if (i < beforeLines.length && j < afterLines.length && beforeLines[i] === afterLines[j]) {
-        changes.push({ type: ' ', line: beforeLines[i] });
-        i++; j++;
-      } else if (j < afterLines.length && (i >= beforeLines.length || beforeLines[i] !== afterLines[j])) {
-        changes.push({ type: '+', line: afterLines[j] });
-        j++;
-      } else {
-        changes.push({ type: '-', line: beforeLines[i] });
-        i++;
-      }
-    }
-
-    // Group into hunks with context
     let k = 0;
     while (k < changes.length) {
       if (changes[k].type !== ' ') {
@@ -348,7 +333,94 @@ export class ToolExecutor {
       }
     }
 
-    return hunks.join('\n');
+    return hunks.length > 2 ? hunks.join('\n') : null;
+  }
+
+  // Proper LCS using dynamic programming (optimized for typical file sizes)
+  private computeLCS(a: string[], b: string[]): Array<{ aIdx: number; bIdx: number }> {
+    const m = a.length;
+    const n = b.length;
+
+    // For very large files, fall back to simple line-by-line
+    if (m > 500 || n > 500) {
+      return this.computeLCSFallback(a, b);
+    }
+
+    // Build DP table
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (a[i - 1] === b[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
+    }
+
+    // Backtrack to find LCS
+    const result: Array<{ aIdx: number; bIdx: number }> = [];
+    let i = m, j = n;
+    while (i > 0 && j > 0) {
+      if (a[i - 1] === b[j - 1]) {
+        result.unshift({ aIdx: i - 1, bIdx: j - 1 });
+        i--; j--;
+      } else if (dp[i - 1][j] > dp[i][j - 1]) {
+        i--;
+      } else {
+        j--;
+      }
+    }
+    return result;
+  }
+
+  private computeLCSFallback(a: string[], b: string[]): Array<{ aIdx: number; bIdx: number }> {
+    // Simple line-by-line matching for large files
+    const result: Array<{ aIdx: number; bIdx: number }> = [];
+    const bUsed = new Set<number>();
+    let bi = 0;
+    for (let ai = 0; ai < a.length; ai++) {
+      while (bi < b.length && (bUsed.has(bi) || a[ai] !== b[bi])) bi++;
+      if (bi < b.length && a[ai] === b[bi]) {
+        result.push({ aIdx: ai, bIdx: bi });
+        bUsed.add(bi);
+        bi++;
+      }
+    }
+    return result;
+  }
+
+  private lcsToChanges(
+    a: string[], b: string[],
+    lcs: Array<{ aIdx: number; bIdx: number }>,
+  ): Array<{ type: '-' | '+' | ' '; line: string }> {
+    const changes: Array<{ type: '-' | '+' | ' '; line: string }> = [];
+    let ai = 0, bi = 0, li = 0;
+
+    while (ai < a.length || bi < b.length) {
+      if (li < lcs.length && ai === lcs[li].aIdx && bi === lcs[li].bIdx) {
+        // Matched line
+        changes.push({ type: ' ', line: a[ai] });
+        ai++; bi++; li++;
+      } else if (li < lcs.length && ai < lcs[li].aIdx) {
+        // Deleted lines (in a but not in LCS)
+        changes.push({ type: '-', line: a[ai] });
+        ai++;
+      } else if (li < lcs.length && bi < lcs[li].bIdx) {
+        // Added lines (in b but not in LCS)
+        changes.push({ type: '+', line: b[bi] });
+        bi++;
+      } else if (ai < a.length) {
+        changes.push({ type: '-', line: a[ai] });
+        ai++;
+      } else if (bi < b.length) {
+        changes.push({ type: '+', line: b[bi] });
+        bi++;
+      } else {
+        break;
+      }
+    }
+    return changes;
   }
 
   /**
