@@ -197,13 +197,6 @@ footer a:hover{color:var(--text)}
 .phone-msg.assistant{background:var(--bg-card);color:var(--text-secondary);align-self:flex-start}
 .phone-msg.tool{background:var(--bg-alt);color:var(--text-muted);font-family:var(--mono);font-size:.65rem;align-self:flex-start}
 .phone-input{border-top:1px solid var(--border-subtle);padding:.5rem 1rem;font-size:.7rem;color:var(--text-muted)}
-.slack-mockup{display:flex;flex-direction:column;gap:.75rem;width:100%;max-width:400px}
-.slack-msg{display:flex;gap:.75rem;align-items:flex-start}
-.slack-avatar{font-size:1.2rem;flex-shrink:0}
-.slack-bubble{background:var(--bg-card);padding:.75rem 1rem;border-radius:8px;font-size:.8rem;line-height:1.6;color:var(--text-secondary)}
-.slack-bubble strong{color:var(--white);display:block;margin-bottom:.25rem;font-size:.85rem}
-.slack-bubble p{margin:0}
-
 /* AGENTS */
 .agent-categories{display:flex;flex-direction:column;gap:2rem;margin-top:2rem}
 .agent-category h3{font-size:1.1rem;font-weight:700;margin-bottom:.75rem;color:var(--white)}
