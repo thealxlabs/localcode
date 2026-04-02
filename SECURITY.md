@@ -2,10 +2,12 @@
 
 ## Supported Versions
 
+
 | Version | Supported          |
 | ------- | ------------------ |
 | 4.0.x   | :white_check_mark: |
 | < 4.0   | :x:                |
+
 
 ## Reporting a Vulnerability
 
@@ -13,7 +15,7 @@ We take the security of Localcode seriously. If you believe you have found a sec
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via email to **security@thealxlabs.com**.
+Instead, please report them via email to **[security@thealxlabs.ca](mailto:security@thealxlabs.ca)**.
 
 You should receive a response within 48 hours. If for some reason you do not, please follow up via email to ensure we received your original message.
 
@@ -48,3 +50,4 @@ When we receive a security bug report, we will:
 - **Permissions**: Configure tool permissions appropriately. Use `ask` mode for sensitive operations.
 - **Safe Mode**: Enable `safeMode` in settings to auto-stash before edits and revert on test failure.
 - **Budget Limits**: Set `budgetLimit` to prevent unexpected cloud provider charges.
+

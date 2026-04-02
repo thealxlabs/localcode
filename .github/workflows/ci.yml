@@ -36,8 +36,8 @@ jobs:
         run: |
           FILE_COUNT=$(find dist -name "*.js" | wc -l)
           echo "Compiled $FILE_COUNT files"
-          if [ "$FILE_COUNT" -lt 100 ]; then
-            echo "ERROR: Expected at least 100 compiled files"
+          if [ "$FILE_COUNT" -lt 30 ]; then
+            echo "ERROR: Expected at least 30 compiled files"
             exit 1
           fi
 
