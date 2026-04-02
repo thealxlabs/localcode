@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Platforms — Localcode</title>
-  <meta name="description" content="Use Localcode in your terminal, VS Code, JetBrains, or desktop app."/>
+  <meta name="description" content="Use Localcode in your terminal or VS Code."/>
   <link rel="icon" type="image/png" href="assets/favicon.png"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
@@ -42,7 +42,7 @@
   <div class="container">
     <div class="section-label">Platforms</div>
     <h1>Use Localcode<br/>where you work</h1>
-    <p class="page-sub">Terminal, VS Code, JetBrains, or desktop app — Localcode meets you wherever you code.</p>
+    <p class="page-sub">Terminal or VS Code — Localcode meets you wherever you code.</p>
   </div>
 </div>
 
@@ -51,7 +51,6 @@
     <div class="platform-tabs" id="platform-tabs">
       <button class="platform-tab active" data-tab="terminal">Terminal</button>
       <button class="platform-tab" data-tab="vscode">VS Code</button>
-      <button class="platform-tab" data-tab="desktop">Desktop App</button>
     </div>
     <div class="platform-panels">
       <div class="platform-panel active" id="pp-terminal">
@@ -98,33 +97,6 @@
                   <div class="ide-msg tool">read_file → src/middleware/auth.ts</div>
                   <div class="ide-msg tool">patch_file → +45 -23 lines changed</div>
                   <div class="ide-msg assistant">Done! All tests pass. The middleware now uses JWT tokens instead of sessions.</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="platform-panel" id="pp-desktop">
-        <div class="pp-grid">
-          <div class="pp-info">
-            <h3>Desktop App</h3>
-            <p>Run Localcode in the desktop app. Manage multiple parallel tasks, review visual diffs, preview servers, and monitor PR status, all from one place.</p>
-            <div class="pp-links"><a href="#" class="btn-p">Download Desktop</a></div>
-          </div>
-          <div class="pp-demo">
-            <div class="desktop-mockup">
-              <div class="desktop-sidebar"><div class="desktop-task active">Refactor auth</div><div class="desktop-task">Fix login bug</div><div class="desktop-task">Add tests</div><div class="desktop-task">Update docs</div></div>
-              <div class="desktop-main">
-                <div class="desktop-code">
-                  <div class="code-line"><span class="code-keyword">import</span> { verify } <span class="code-keyword">from</span> <span class="code-string">'jsonwebtoken'</span>;</div>
-                  <div class="code-line"></div>
-                  <div class="code-line"><span class="code-keyword">export const</span> <span class="code-func">authMiddleware</span> = (req, res, next) => {</div>
-                  <div class="code-line code-added">  <span class="code-keyword">const</span> token = req.headers.authorization?.split(<span class="code-string">' '</span>)[<span class="code-num">1</span>];</div>
-                  <div class="code-line code-added">  <span class="code-keyword">if</span> (!token) <span class="code-keyword">return</span> res.status(<span class="code-num">401</span>).json({ error: <span class="code-string">'No token'</span> });</div>
-                  <div class="code-line code-added">  <span class="code-keyword">const</span> decoded = verify(token, process.env.JWT_SECRET);</div>
-                  <div class="code-line code-added">  req.user = decoded;</div>
-                  <div class="code-line code-added">  next();</div>
-                  <div class="code-line">};</div>
                 </div>
               </div>
             </div>
