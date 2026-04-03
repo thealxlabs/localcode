@@ -339,30 +339,40 @@ async function runClaudeAgent(
     if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
     await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
 
-    const res = await fetch(`${config.baseUrl}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
+    const res = await retryWithBackoff(
+      async () => {
+        const r = await fetch(`${config.baseUrl}/v1/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': config.apiKey ?? '',
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: stepModel,
+            max_tokens: 8096,
+            system: systemPrompt,
+            messages: history,
+            tools: claudeTools,
+            stream: true,
+          }),
+          signal,
+        });
+        if (!r.ok || !r.body) {
+          throw new Error(`Claude error ${r.status}: ${await r.text()}`);
+        }
+        return r;
       },
-      body: JSON.stringify({
-        model: stepModel,
-        max_tokens: 8096,
-        system: systemPrompt,
-        messages: history,
-        tools: claudeTools,
-        stream: true,
-      }),
+      'Claude chat request',
       signal,
-    });
+    );
 
-    if (!res.ok || !res.body) {
-      await onChunk({ type: 'error', error: `Claude error ${res.status}: ${await res.text()}` });
+    if (!(res as Response).body) {
+      await onChunk({ type: 'error', error: 'Claude response had no body' });
       return;
     }
 
-    const reader = res.body.getReader();
+    const reader = (res as Response).body!.getReader();
     const decoder = new TextDecoder();
     let buf = '';
     let assistantText = '';
@@ -491,19 +501,29 @@ async function runOpenAIAgent(
     if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
     await onChunk({ type: 'agent_step', step, maxSteps: agentCfg.maxSteps });
 
-    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: stepModel, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
+    const res = await retryWithBackoff(
+      async () => {
+        const r = await fetch(`${baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ model: stepModel, messages: history, tools: oaiTools, tool_choice: 'auto', stream: true }),
+          signal,
+        });
+        if (!r.ok || !r.body) {
+          throw new Error(`${providerName} error ${r.status}: ${await r.text()}`);
+        }
+        return r;
+      },
+      `${providerName} chat request`,
       signal,
-    });
+    );
 
-    if (!res.ok || !res.body) {
-      await onChunk({ type: 'error', error: `${providerName} error ${res.status}: ${await res.text()}` });
+    if (!(res as Response).body) {
+      await onChunk({ type: 'error', error: `${providerName} response had no body` });
       return;
     }
 
-    const reader = res.body.getReader();
+    const reader = (res as Response).body!.getReader();
     const decoder = new TextDecoder();
     let buf = '';
     let assistantText = '';

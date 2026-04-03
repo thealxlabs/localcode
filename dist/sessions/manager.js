@@ -295,21 +295,17 @@ export function restoreCheckpoint(state, checkpointId) {
     };
 }
 export function estimateTokens(messages) {
-    // More accurate estimation based on OpenAI's tokenizer research:
-    // - English text: ~1 token per 4 chars
-    // - Code: ~1 token per 3 chars (more symbols, less common tokens)
-    // - Tool results: ~50 tokens overhead + content
-    // - System prompts: ~1 token per 3.5 chars
     let total = 0;
     for (const m of messages) {
         const isCode = m.content.includes('```') || m.content.includes('{') || m.content.includes('(') || m.content.includes('import ');
         const isToolResult = m.content.startsWith('Tool result') || m.content.startsWith('[');
         const charsPerToken = isCode ? 3 : 4;
-        total += Math.ceil(m.content.length / charsPerToken);
+        const baseTokens = Math.ceil(m.content.length / charsPerToken);
+        total += baseTokens;
         if (isToolResult)
             total += 50;
         if (m.role === 'system')
-            total += Math.ceil(m.content.length * 0.07);
+            total += Math.ceil(baseTokens * 0.07);
     }
     return total;
 }

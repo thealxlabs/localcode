@@ -3,6 +3,7 @@
 
 import { logger } from '../core/logger.js';
 import type { Settings } from './types.js';
+import { DEFAULT_SETTINGS } from './types.js';
 
 const CURRENT_SCHEMA_VERSION = 2;
 
@@ -17,7 +18,6 @@ const migrations: Migration[] = [
     fromVersion: 1,
     toVersion: 2,
     migrate: (settings) => {
-      // v1 -> v2: Rename 'nyx.md' references to 'localcode.md'
       const s = { ...settings };
       if (s.memory && typeof s.memory === 'object') {
         const mem = s.memory as Record<string, unknown>;
@@ -25,7 +25,6 @@ const migrations: Migration[] = [
           mem.memoryFile = '.localcode.md';
         }
       }
-      // v1 -> v2: Ensure agentDispatch section exists
       if (!s.agentDispatch) {
         s.agentDispatch = {
           enabled: true,
@@ -43,6 +42,27 @@ const migrations: Migration[] = [
     },
   },
 ];
+
+function deepMergeDefaults(raw: Record<string, unknown>, defaults: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...defaults };
+  for (const key of Object.keys(raw)) {
+    if (
+      raw[key] && typeof raw[key] === 'object' && !Array.isArray(raw[key]) &&
+      defaults[key] && typeof defaults[key] === 'object'
+    ) {
+      result[key] = deepMergeDefaults(raw[key] as Record<string, unknown>, defaults[key] as Record<string, unknown>);
+    } else {
+      result[key] = raw[key];
+    }
+  }
+  return result;
+}
+
+export function validateSettings(raw: Record<string, unknown>): Settings {
+  const migrated = migrateSettings(raw);
+  const merged = deepMergeDefaults(migrated as unknown as Record<string, unknown>, DEFAULT_SETTINGS as unknown as Record<string, unknown>);
+  return merged as unknown as Settings;
+}
 
 export function migrateSettings(raw: Record<string, unknown>): Settings {
   const version = (raw.version as number) ?? 1;

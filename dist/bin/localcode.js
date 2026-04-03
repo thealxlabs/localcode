@@ -127,6 +127,21 @@ function Root() {
 // ── Launch ────────────────────────────────────────────────────────────────────
 const { waitUntilExit } = render(React.createElement(Root), { exitOnCtrlC: false });
 waitUntilExit()
-    .then(() => process.exit(0))
+    .then(() => {
+    try {
+        const { saveSession } = require('../sessions/manager.js');
+        const { loadSession } = require('../sessions/manager.js');
+        saveSession(loadSession());
+    }
+    catch { /* exit regardless */ }
+    process.exit(0);
+})
     .catch(() => process.exit(1));
+process.on('beforeExit', () => {
+    try {
+        const { saveSession, loadSession } = require('../sessions/manager.js');
+        saveSession(loadSession());
+    }
+    catch { /* non-critical */ }
+});
 //# sourceMappingURL=localcode.js.map

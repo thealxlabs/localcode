@@ -6,7 +6,7 @@ import { homedir } from 'os';
 import type { Settings } from './types.js';
 import { DEFAULT_SETTINGS } from './types.js';
 import { logger } from '../core/logger.js';
-import { migrateSettings } from './migrations.js';
+import { migrateSettings, validateSettings } from './migrations.js';
 
 const GLOBAL_CONFIG_DIR = join(homedir(), '.localcode');
 const GLOBAL_SETTINGS_PATH = join(GLOBAL_CONFIG_DIR, 'settings.json');
@@ -29,16 +29,7 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
   return result;
 }
 
-function validateSettings(settings: unknown): Settings {
-  if (!settings || typeof settings !== 'object') return { ...DEFAULT_SETTINGS };
-  const s = settings as Record<string, unknown>;
-  // Ensure required top-level keys exist
-  const required = ['provider', 'agentDispatch', 'permissions', 'ui', 'session', 'tools', 'git', 'memory', 'analytics', 'mcp'];
-  for (const key of required) {
-    if (!(key in s)) s[key] = (DEFAULT_SETTINGS as Record<string, unknown>)[key];
-  }
-  return s as unknown as Settings;
-}
+export { validateSettings } from './migrations.js';
 
 export function loadSettings(): Settings {
   // Use cache if fresh
