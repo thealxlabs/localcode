@@ -110,6 +110,31 @@ export function App({ initialState }) {
             }
         }).catch(() => { });
     }, []);
+    // First-run onboarding
+    useEffect(() => {
+        const { isFirstRun } = require('../sessions/manager.js');
+        if (isFirstRun()) {
+            const onboardingSteps = [
+                'Welcome to Localcode v4.0.0! 🎉',
+                '',
+                'Quick setup:',
+                '1. Choose a provider:',
+                '   /provider ollama    ← Free, local, no API key needed',
+                '   /provider openai    ← Requires OPENAI_API_KEY',
+                '   /provider claude    ← Requires ANTHROPIC_API_KEY',
+                '   /provider groq      ← Requires GROQ_API_KEY',
+                '',
+                '2. Browse 139 agents: /agents',
+                '3. Start coding: Just type your request!',
+                '',
+                'Type /help for all commands, /onboarding to see this again.',
+            ];
+            setTimeout(() => {
+                sysMsg(onboardingSteps.join('\n'));
+            }, 500);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     // Spinner animation while streaming
     useEffect(() => {
         if (!isStreaming)
@@ -1852,6 +1877,66 @@ ${msgHtml}
                 }
                 const result = await executorRef.current.execute({ name: 'find_files', args: { pattern: args } });
                 sysMsg(result.success && result.output.trim() ? result.output : `No files matching: ${args}`);
+                return;
+            }
+            case '/update': {
+                sysMsg('Checking for updates…');
+                setMood('thinking');
+                try {
+                    const { execFile } = await import('child_process');
+                    const checkUpdate = () => {
+                        return new Promise((resolve) => {
+                            execFile('npm', ['view', '@localcode/cli', 'version'], (err, stdout) => {
+                                if (err) {
+                                    resolve({ latest: '', current: pkg.version, needsUpdate: false });
+                                    return;
+                                }
+                                const latest = stdout.trim();
+                                resolve({ latest, current: pkg.version, needsUpdate: latest !== pkg.version });
+                            });
+                        });
+                    };
+                    const result = await checkUpdate();
+                    if (result.needsUpdate) {
+                        sysMsg(`Update available: ${result.current} → ${result.latest}\nRunning: npm install -g @localcode/cli@${result.latest}`);
+                        await new Promise((resolve) => {
+                            execFile('npm', ['install', '-g', `@localcode/cli@${result.latest}`], (err, stdout, stderr) => {
+                                if (err) {
+                                    sysMsg(`Update failed: ${stderr || err.message}`, true);
+                                }
+                                else {
+                                    sysMsg(`✓ Updated to ${result.latest}. Restart Localcode to apply.`);
+                                }
+                                resolve();
+                            });
+                        });
+                    }
+                    else {
+                        sysMsg(`Already on latest version (${result.current}).`);
+                    }
+                }
+                catch (err) {
+                    sysMsg(`Update check failed: ${err instanceof Error ? err.message : String(err)}`, true);
+                }
+                setMood('idle');
+                return;
+            }
+            case '/onboarding': {
+                const steps = [
+                    '1. Choose a provider: /provider ollama (free, local) or /provider openai/claude/groq',
+                    '2. Set API keys if needed: /apikey <key> (or set env vars OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY)',
+                    '3. Browse agents: /agents  or activate one: /agent <name>',
+                    '4. Start coding: Just type your request!',
+                    '',
+                    'Quick commands:',
+                    '  /help          Show all commands',
+                    '  /agent         Browse 139 specialized agents',
+                    '  /orchestrate   Run multi-agent pipeline',
+                    '  /commit        Generate commit message',
+                    '  /settings      Show current settings',
+                    '  /update        Check for updates',
+                ];
+                sysMsg(steps.join('\n'));
                 return;
             }
             case '/exit': {

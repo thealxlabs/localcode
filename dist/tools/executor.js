@@ -191,60 +191,90 @@ export class ToolExecutor {
     }
     searchFiles(args) {
         const searchPath = args.path ? this.resolvePath(args.path) : this.workingDir;
-        const grepArgs = [
-            '--recursive',
-            '--line-number',
-            '--with-filename',
-            '--exclude-dir=node_modules',
-            '--exclude-dir=.git',
-            '--exclude-dir=dist',
-            '--exclude-dir=.next',
-            ...(args.case_insensitive ? ['--ignore-case'] : []),
-            args.pattern,
-            searchPath,
-        ];
-        return new Promise((resolve) => {
-            execFile('grep', grepArgs, { timeout: 15000 }, (err, stdout, stderr) => {
-                if (err && err.code !== '1' && Number(err.code) !== 1 && !stdout) {
-                    resolve({ success: false, output: stderr || err.message });
-                }
-                else {
-                    const out = stdout.trim();
-                    // Make paths relative for readability
-                    const relative = out.split('\n').map((line) => {
-                        const abs2 = line.split(':')[0];
-                        if (abs2 && path.isAbsolute(abs2)) {
-                            return line.replace(abs2, path.relative(this.workingDir, abs2));
+        // Cross-platform search: use native Node.js fs on all platforms
+        const searchRecursive = (dir, pattern) => {
+            const results = [];
+            try {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === '.next')
+                        continue;
+                    if (entry.isDirectory()) {
+                        results.push(...searchRecursive(fullPath, pattern));
+                    }
+                    else if (entry.isFile()) {
+                        try {
+                            const content = fs.readFileSync(fullPath, 'utf8');
+                            const lines = content.split('\n');
+                            for (let i = 0; i < lines.length; i++) {
+                                if (pattern.test(lines[i])) {
+                                    const relPath = path.relative(this.workingDir, fullPath);
+                                    results.push({ file: relPath, line: i + 1, content: lines[i].trim() });
+                                    pattern.lastIndex = 0; // Reset regex
+                                }
+                            }
                         }
-                        return line;
-                    }).join('\n');
-                    resolve({ success: true, output: relative || 'No matches found' });
+                        catch {
+                            // Skip binary/unreadable files
+                        }
+                    }
                 }
-            });
-        });
+            }
+            catch { /* skip inaccessible dirs */ }
+            return results;
+        };
+        try {
+            const flags = args.case_insensitive ? 'i' : '';
+            const regex = new RegExp(args.pattern, flags);
+            const results = searchRecursive(searchPath, regex);
+            if (results.length === 0) {
+                return Promise.resolve({ success: true, output: 'No matches found' });
+            }
+            const output = results.slice(0, 100).map(r => `${r.file}:${r.line}: ${r.content}`).join('\n');
+            const truncated = results.length > 100 ? `\n\n... and ${results.length - 100} more results` : '';
+            return Promise.resolve({ success: true, output: output + truncated });
+        }
+        catch (err) {
+            return Promise.resolve({ success: false, output: `Search failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
     }
     findFiles(args) {
         const searchDir = args.path ? this.resolvePath(args.path) : this.workingDir;
-        const findArgs = [
-            searchDir,
-            '-not', '-path', '*/node_modules/*',
-            '-not', '-path', '*/.git/*',
-            '-not', '-path', '*/dist/*',
-            '-name', args.pattern,
-        ];
-        return new Promise((resolve) => {
-            execFile('find', findArgs, { timeout: 10000 }, (err, stdout, stderr) => {
-                if (err && !stdout) {
-                    resolve({ success: false, output: stderr || err.message });
+        // Cross-platform file finding: use native Node.js fs on all platforms
+        const findRecursive = (dir, pattern) => {
+            const results = [];
+            try {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    const fullPath = path.join(dir, entry.name);
+                    if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === '.next')
+                        continue;
+                    if (entry.isDirectory()) {
+                        results.push(...findRecursive(fullPath, pattern));
+                    }
+                    else if (entry.isFile() || entry.isSymbolicLink()) {
+                        // Support glob-like patterns: *.ts, *.test.*, etc.
+                        const globRegex = pattern.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.');
+                        if (new RegExp(`^${globRegex}$`).test(entry.name)) {
+                            results.push(path.relative(this.workingDir, fullPath));
+                        }
+                    }
                 }
-                else {
-                    const results = stdout.trim().split('\n').filter(Boolean)
-                        .map((p) => path.relative(this.workingDir, p))
-                        .join('\n');
-                    resolve({ success: true, output: results || 'No files found' });
-                }
-            });
-        });
+            }
+            catch { /* skip inaccessible dirs */ }
+            return results;
+        };
+        try {
+            const results = findRecursive(searchDir, args.pattern);
+            if (results.length === 0) {
+                return Promise.resolve({ success: true, output: 'No files found' });
+            }
+            return Promise.resolve({ success: true, output: results.slice(0, 100).join('\n') + (results.length > 100 ? `\n\n... and ${results.length - 100} more` : '') });
+        }
+        catch (err) {
+            return Promise.resolve({ success: false, output: `Find failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
     }
     gitOperation(args) {
         const gitArgs = args.args.trim().split(/\s+/).filter(Boolean);
