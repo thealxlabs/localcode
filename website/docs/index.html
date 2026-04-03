@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Documentation — Localcode</title>
-  <meta name="description" content="Documentation for Localcode — the open-source AI coding agent."/>
+  <meta name="description" content="Comprehensive documentation for Localcode — the open-source AI coding agent with 139 specialized agents, multi-agent orchestration, and local LLM support."/>
   <link rel="icon" type="image/png" href="../assets/favicon.png"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
@@ -53,13 +53,14 @@
       <a href="#telemetry" class="docs-sidebar-link">Telemetry</a>
       <a href="#rate-limiting" class="docs-sidebar-link">Rate Limiting</a>
       <a href="#security" class="docs-sidebar-link">Security</a>
+      <a href="#benchmarks" class="docs-sidebar-link">Benchmarks</a>
     </div>
   </aside>
 
   <main class="docs-content">
-    <h1 id="overview">Overview</h1>
-    <p>Localcode is a full-featured AI coding agent that runs in your terminal. It connects to any LLM provider (local or cloud), reads your codebase, edits files, runs commands, and iterates until the job is done. It comes with <strong>139 specialized agents</strong> across engineering, design, testing, security, DevOps, and more.</p>
-    <blockquote><p>Unlike cloud-only coding assistants, Localcode runs locally with Ollama — your code never leaves your machine.</p></blockquote>
+    <h1 id="overview">Documentation</h1>
+    <p>Localcode is a full-featured AI coding agent that runs in your terminal. It connects to any LLM provider (local or cloud), reads your codebase, edits files, runs commands, and iterates until the job is done. It comes with <strong>139 specialized agents</strong> across engineering, design, testing, security, DevOps, and more — each with deep domain expertise.</p>
+    <blockquote><p>Unlike cloud-only coding assistants, Localcode runs locally with Ollama — your code never leaves your machine. No subscriptions. No cloud lock-in. No telemetry unless you opt in.</p></blockquote>
 
     <h2 id="installation">Installation</h2>
     <h3>From npm (recommended)</h3>
@@ -71,13 +72,22 @@ npm install
 npm run build
 npm link</code></pre>
     <h3>Requirements</h3>
-    <ul><li>Node.js 18.0 or later</li><li>macOS, Linux, or WSL on Windows</li><li>Ollama (optional, for local models)</li></ul>
+    <ul>
+      <li><strong>Node.js</strong> 18.0 or later</li>
+      <li><strong>macOS</strong>, <strong>Linux</strong>, or <strong>WSL</strong> on Windows</li>
+      <li><strong>Ollama</strong> (optional, for local models) — <a href="https://ollama.com" target="_blank">ollama.com</a></li>
+    </ul>
 
     <h2 id="quick-start">Quick Start</h2>
-    <ol><li><strong>Install:</strong> <code>npm install -g @localcode/cli</code></li><li><strong>Launch:</strong> Run <code>localcode</code> in your terminal</li><li><strong>Choose provider:</strong> Pick Ollama for free local AI, or connect a cloud provider</li><li><strong>Start coding:</strong> Describe what you need — Localcode handles the rest</li></ol>
+    <ol>
+      <li><strong>Install:</strong> <code>npm install -g @localcode/cli</code></li>
+      <li><strong>Launch:</strong> Run <code>localcode</code> in your terminal</li>
+      <li><strong>Choose provider:</strong> Pick Ollama for free local AI, or connect a cloud provider</li>
+      <li><strong>Start coding:</strong> Describe what you need — Localcode handles the rest</li>
+    </ol>
 
     <h2 id="configuration">Configuration</h2>
-    <p>Localcode uses <code>~/.localcode/settings.json</code> for global config and <code>.localcode/settings.json</code> for project-specific config.</p>
+    <p>Localcode uses <code>~/.localcode/settings.json</code> for global config and <code>.localcode/settings.json</code> for project-specific config. Settings are merged with global settings taking precedence.</p>
     <pre><code>{
   "provider": {
     "provider": "ollama",
@@ -91,25 +101,137 @@ npm link</code></pre>
     "requireApproval": false,
     "maxConcurrentAgents": 5,
     "dispatchStrategy": "smart",
-    "qualityGate": true
+    "qualityGate": true,
+    "maxRetries": 3
+  },
+  "permissions": {
+    "fileEdit": "allow",
+    "fileWrite": "allow",
+    "bash": "allow",
+    "bashPatterns": {
+      "git *": "allow",
+      "npm test*": "allow"
+    }
+  },
+  "session": {
+    "autoSave": true,
+    "autoSaveInterval": 30,
+    "maxHistorySize": 1000,
+    "autoCompact": true,
+    "compactThreshold": 50
+  },
+  "git": {
+    "enabled": true,
+    "autoCommit": false,
+    "autoStash": false
+  },
+  "memory": {
+    "enabled": true,
+    "autoExtract": true,
+    "persistentMemory": true
+  },
+  "mcp": {
+    "enabled": true,
+    "servers": {},
+    "autoConnect": true,
+    "timeout": 30000
   }
 }</code></pre>
+    <h3>Environment Variables</h3>
+    <table>
+      <tr><th>Variable</th><th>Description</th></tr>
+      <tr><td><code>OPENAI_API_KEY</code></td><td>OpenAI API key (auto-loaded)</td></tr>
+      <tr><td><code>ANTHROPIC_API_KEY</code></td><td>Anthropic API key (auto-loaded)</td></tr>
+      <tr><td><code>GROQ_API_KEY</code></td><td>Groq API key (auto-loaded)</td></tr>
+      <tr><td><code>LOCALCODE_PROVIDER</code></td><td>Default provider override</td></tr>
+      <tr><td><code>LOCALCODE_MODEL</code></td><td>Default model override</td></tr>
+      <tr><td><code>LOCALCODE_WORKDIR</code></td><td>Default working directory</td></tr>
+    </table>
 
     <h2 id="providers">Providers</h2>
-    <p>Localcode supports any OpenAI-compatible API endpoint.</p>
-    <table><tr><th>Provider</th><th>Setup</th><th>Local?</th></tr><tr><td>Ollama</td><td>Install Ollama, run <code>localcode</code></td><td>Yes</td></tr><tr><td>OpenAI</td><td>Set <code>OPENAI_API_KEY</code></td><td>No</td></tr><tr><td>Anthropic</td><td>Set <code>ANTHROPIC_API_KEY</code></td><td>No</td></tr><tr><td>Groq</td><td>Set <code>GROQ_API_KEY</code></td><td>No</td></tr></table>
-    <p>Switch providers mid-session with <code>/provider &lt;name&gt;</code>.</p>
+    <p>Localcode supports any OpenAI-compatible API endpoint. Switch providers mid-session with <code>/provider &lt;name&gt;</code>.</p>
+    <table>
+      <tr><th>Provider</th><th>Setup</th><th>Local?</th><th>Default Model</th></tr>
+      <tr><td><strong>Ollama</strong></td><td>Install Ollama, run <code>localcode</code></td><td>Yes</td><td>qwen2.5-coder:7b</td></tr>
+      <tr><td><strong>OpenAI</strong></td><td>Set <code>OPENAI_API_KEY</code></td><td>No</td><td>gpt-4o</td></tr>
+      <tr><td><strong>Anthropic</strong></td><td>Set <code>ANTHROPIC_API_KEY</code></td><td>No</td><td>claude-sonnet-4-5</td></tr>
+      <tr><td><strong>Groq</strong></td><td>Set <code>GROQ_API_KEY</code></td><td>No</td><td>llama-3.3-70b-versatile</td></tr>
+    </table>
 
     <h2 id="tools">Tools</h2>
-    <p>Localcode has 10 built-in tools that agents use autonomously:</p>
-    <table><tr><th>Tool</th><th>Description</th></tr><tr><td><code>read_file</code></td><td>Read file contents with line numbers</td></tr><tr><td><code>write_file</code></td><td>Create or overwrite a file</td></tr><tr><td><code>patch_file</code></td><td>Edit part of a file (old_str → new_str)</td></tr><tr><td><code>delete_file</code></td><td>Delete a file</td></tr><tr><td><code>move_file</code></td><td>Move/rename a file</td></tr><tr><td><code>run_shell</code></td><td>Run any shell command</td></tr><tr><td><code>list_dir</code></td><td>List directory contents (recursive)</td></tr><tr><td><code>search_files</code></td><td>Grep-like search across the project</td></tr><tr><td><code>find_files</code></td><td>Find files by name pattern</td></tr><tr><td><code>git_operation</code></td><td>Run git commands</td></tr></table>
+    <p>Localcode has 10 built-in tools that agents use autonomously. Each tool requires permission before execution (configurable in settings).</p>
+    <table>
+      <tr><th>Tool</th><th>Description</th><th>Parameters</th></tr>
+      <tr><td><code>read_file</code></td><td>Read file contents with line numbers</td><td><code>path</code></td></tr>
+      <tr><td><code>write_file</code></td><td>Create or overwrite a file</td><td><code>path</code>, <code>content</code></td></tr>
+      <tr><td><code>patch_file</code></td><td>Edit part of a file (old_str → new_str)</td><td><code>path</code>, <code>old_str</code>, <code>new_str</code></td></tr>
+      <tr><td><code>delete_file</code></td><td>Delete a file</td><td><code>path</code></td></tr>
+      <tr><td><code>move_file</code></td><td>Move/rename a file</td><td><code>source</code>, <code>destination</code></td></tr>
+      <tr><td><code>run_shell</code></td><td>Run any shell command</td><td><code>command</code>, <code>cwd</code></td></tr>
+      <tr><td><code>list_dir</code></td><td>List directory contents (recursive)</td><td><code>path</code>, <code>recursive</code></td></tr>
+      <tr><td><code>search_files</code></td><td>Grep-like search across the project</td><td><code>pattern</code>, <code>path</code>, <code>case_insensitive</code></td></tr>
+      <tr><td><code>find_files</code></td><td>Find files by name pattern</td><td><code>pattern</code>, <code>path</code></td></tr>
+      <tr><td><code>git_operation</code></td><td>Run git commands</td><td><code>args</code></td></tr>
+    </table>
 
     <h2 id="commands">Commands</h2>
-    <p>Type <code>/</code> to see all available commands. Key commands:</p>
-    <table><tr><th>Command</th><th>Description</th></tr><tr><td><code>/agent</code></td><td>Browse and activate agents</td></tr><tr><td><code>/agents</code></td><td>List all agents by category</td></tr><tr><td><code>/orchestrate</code></td><td>Run multi-agent pipeline</td></tr><tr><td><code>/nexus</code></td><td>Full NEXUS pipeline</td></tr><tr><td><code>/commit</code></td><td>Generate commit message</td></tr><tr><td><code>/provider</code></td><td>Switch provider</td></tr><tr><td><code>/model</code></td><td>Switch model</td></tr><tr><td><code>/clear</code></td><td>Clear conversation</td></tr><tr><td><code>/settings</code></td><td>Show current settings</td></tr><tr><td><code>/benchmarks</code></td><td>Run performance benchmarks</td></tr></table>
+    <p>Type <code>/</code> to see all available commands. Localcode has 60+ slash commands organized by category.</p>
+    <h3>Session Commands</h3>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><code>/clear</code></td><td>Clear conversation history</td></tr>
+      <tr><td><code>/compact</code></td><td>Summarize & compress conversation</td></tr>
+      <tr><td><code>/checkpoint</code></td><td>Save a checkpoint</td></tr>
+      <tr><td><code>/restore</code></td><td>Restore a checkpoint</td></tr>
+      <tr><td><code>/retry</code></td><td>Regenerate last response</td></tr>
+      <tr><td><code>/copy</code></td><td>Copy last response to clipboard</td></tr>
+      <tr><td><code>/export</code></td><td>Export conversation to markdown</td></tr>
+      <tr><td><code>/undo</code></td><td>Undo last file change</td></tr>
+      <tr><td><code>/status</code></td><td>Show session info</td></tr>
+      <tr><td><code>/exit</code></td><td>Exit</td></tr>
+    </table>
+    <h3>Agent Commands</h3>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><code>/agent</code></td><td>Browse and activate agents</td></tr>
+      <tr><td><code>/agents</code></td><td>List all agents by category</td></tr>
+      <tr><td><code>/orchestrate</code></td><td>Run multi-agent pipeline</td></tr>
+      <tr><td><code>/nexus</code></td><td>Full NEXUS pipeline</td></tr>
+      <tr><td><code>/swarm</code></td><td>Parallel agent swarm</td></tr>
+    </table>
+    <h3>Provider Commands</h3>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><code>/provider</code></td><td>Switch AI provider</td></tr>
+      <tr><td><code>/apikey</code></td><td>Set API key for current provider</td></tr>
+      <tr><td><code>/model</code></td><td>Change model</td></tr>
+      <tr><td><code>/models</code></td><td>List available models</td></tr>
+      <tr><td><code>/cost</code></td><td>Show estimated session cost</td></tr>
+    </table>
+    <h3>Utility Commands</h3>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><code>/commit</code></td><td>AI-generated git commit</td></tr>
+      <tr><td><code>/review</code></td><td>AI code review of current changes</td></tr>
+      <tr><td><code>/diff</code></td><td>Show session file changes</td></tr>
+      <tr><td><code>/doctor</code></td><td>Health check</td></tr>
+      <tr><td><code>/memory</code></td><td>Show and manage memory files</td></tr>
+      <tr><td><code>/hooks</code></td><td>Show configured hooks</td></tr>
+      <tr><td><code>/mcp</code></td><td>Manage MCP servers</td></tr>
+      <tr><td><code>/benchmarks</code></td><td>Run performance benchmarks</td></tr>
+      <tr><td><code>/settings</code></td><td>Show current settings</td></tr>
+      <tr><td><code>/telemetry</code></td><td>View/toggle telemetry</td></tr>
+      <tr><td><code>/rate-limit</code></td><td>View rate limit status</td></tr>
+    </table>
 
     <h2 id="permissions">Permissions</h2>
-    <p>Every file write, patch, or shell command asks for permission first. Configure per-tool and per-command pattern in settings:</p>
+    <p>Every file write, patch, or shell command asks for permission first. Three approval modes:</p>
+    <ul>
+      <li><strong>suggest</strong> — Ask for every tool call</li>
+      <li><strong>auto-edit</strong> — Auto-approve read/search tools, ask for writes</li>
+      <li><strong>full-auto</strong> — Auto-approve all tools</li>
+    </ul>
+    <p>Configure per-tool and per-command pattern in settings:</p>
     <pre><code>"permissions": {
   "fileEdit": "allow",
   "fileWrite": "allow",
@@ -122,6 +244,14 @@ npm link</code></pre>
 
     <h2 id="agents-overview">Agents Overview</h2>
     <p>Localcode comes with 139 specialized agents across engineering, testing, security, DevOps, design, marketing, product, and strategy. Each agent has deep domain expertise encoded in its system prompt.</p>
+    <h3>Engineering (30+ agents)</h3>
+    <p>AI Engineer, Senior Developer, Software Architect, Backend Architect, Frontend Developer, Database Optimizer, API Designer, Code Reviewer, Git Workflow Master, and 21 more.</p>
+    <h3>Testing (10+ agents)</h3>
+    <p>API Tester, Test Results Analyzer, Reality Checker, Test-Driven Developer, Integration Tester, E2E Test Engineer, and 4 more.</p>
+    <h3>Security (8+ agents)</h3>
+    <p>Security Engineer, Threat Detection, Compliance Auditor, Blockchain Security, Penetration Tester, and 3 more.</p>
+    <h3>DevOps (10+ agents)</h3>
+    <p>DevOps Automator, SRE, Infrastructure Maintainer, Cloud Architect, CI/CD Engineer, and 5 more.</p>
 
     <h2 id="auto-dispatch">Auto-Dispatch</h2>
     <p>Agents are automatically dispatched based on task context. No manual switching needed:</p>
@@ -134,11 +264,23 @@ User: "Optimize the database queries"
 
     <h2 id="orchestration">Orchestration</h2>
     <p>Run multi-agent pipelines with <code>/orchestrate "task" &lt;mode&gt;</code>:</p>
-    <ul><li><strong>Full:</strong> All phases, all agents, parallel execution</li><li><strong>Sprint:</strong> 4 phases, focused agents</li><li><strong>Micro:</strong> Quick task, minimal agents</li></ul>
+    <ul>
+      <li><strong>Full:</strong> All phases, all agents, parallel execution</li>
+      <li><strong>Sprint:</strong> 4 phases, focused agents</li>
+      <li><strong>Micro:</strong> Quick task, minimal agents</li>
+    </ul>
 
     <h2 id="nexus">NEXUS Pipeline</h2>
     <p>The full NEXUS pipeline coordinates multiple agents through 7 phases:</p>
-    <ol><li><strong>Discovery</strong> — Requirements gathering, competitive analysis</li><li><strong>Strategy</strong> — Architecture decisions, technology selection</li><li><strong>Foundation</strong> — Project scaffolding, CI/CD setup</li><li><strong>Build</strong> — Core implementation with parallel agents</li><li><strong>Hardening</strong> — Security audit, performance optimization, testing</li><li><strong>Launch</strong> — Deployment, documentation, monitoring</li><li><strong>Operate</strong> — Ongoing maintenance, incident response</li></ol>
+    <ol>
+      <li><strong>Discovery</strong> — Requirements gathering, competitive analysis</li>
+      <li><strong>Strategy</strong> — Architecture decisions, technology selection</li>
+      <li><strong>Foundation</strong> — Project scaffolding, CI/CD setup</li>
+      <li><strong>Build</strong> — Core implementation with parallel agents</li>
+      <li><strong>Hardening</strong> — Security audit, performance optimization, testing</li>
+      <li><strong>Launch</strong> — Deployment, documentation, monitoring</li>
+      <li><strong>Operate</strong> — Ongoing maintenance, incident response</li>
+    </ol>
     <p>Quality gates enforced between each phase. Dev↔QA loops running for all implementation tasks.</p>
 
     <h2 id="plugins">Plugins</h2>
@@ -152,14 +294,23 @@ export default {
     context.addDisplay({ role: 'assistant', content: `Hello ${args}!` });
   }
 };</code></pre>
+    <p>Plugins are sandboxed with a 30-second execution timeout and blocked from accessing dangerous modules (eval, child_process, fs, net, http).</p>
 
     <h2 id="hooks">Hooks</h2>
     <p>Custom logic that runs before/after tool use:</p>
     <pre><code>// ~/.localcode/hooks.json
 {
+  "PreToolUse": [{
+    "matcher": "run_shell",
+    "hooks": [{ "type": "command", "command": "echo 'Running: $COMMAND'" }]
+  }],
   "PostToolUse": [{
     "matcher": "write_file",
     "hooks": [{ "type": "command", "command": "prettier --write $FILE_PATH" }]
+  }],
+  "Notification": [{
+    "matcher": ".*",
+    "hooks": [{ "type": "command", "command": "notify-send 'Localcode' '$MESSAGE'" }]
   }]
 }</code></pre>
 
@@ -173,36 +324,66 @@ export default {
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
       }
-    }
+    },
+    "autoConnect": true,
+    "timeout": 30000
   }
 }</code></pre>
+    <p>MCP servers auto-reconnect with exponential backoff if they disconnect.</p>
 
     <h2 id="memory">Memory</h2>
     <p>Localcode maintains persistent memory across sessions:</p>
-    <ul><li><strong>Global memory:</strong> <code>~/.localcode.md</code> — Always loaded</li><li><strong>Project memory:</strong> <code>&lt;project&gt;/.localcode.md</code> — Loaded when cwd matches</li><li><strong>Auto-extraction:</strong> Patterns, conventions, and style guides automatically extracted</li></ul>
+    <ul>
+      <li><strong>Global memory:</strong> <code>~/.localcode.md</code> — Always loaded</li>
+      <li><strong>Project memory:</strong> <code>&lt;project&gt;/.localcode.md</code> — Loaded when cwd matches</li>
+      <li><strong>Auto-extraction:</strong> Patterns, conventions, and style guides automatically extracted from your code</li>
+    </ul>
 
     <h2 id="telemetry">Telemetry</h2>
-    <p>Telemetry is opt-in and anonymous. No PII is collected. You can disable it at any time:</p>
-    <pre><code>// In settings.json
-{
+    <p>Telemetry is opt-in and anonymous. No PII is collected. Data is stored locally in <code>~/.localcode/telemetry.log</code>.</p>
+    <p>Tracked events: command usage, tool execution, errors, session start/end, agent dispatch, provider switches.</p>
+    <p>Disable with <code>/telemetry off</code> or in settings:</p>
+    <pre><code>{
   "telemetry": {
     "enabled": false
   }
 }</code></pre>
-    <p>Or use the <code>/telemetry off</code> command in the app.</p>
 
     <h2 id="rate-limiting">Rate Limiting</h2>
     <p>Localcode includes built-in rate limiting to protect you from burning API credits:</p>
-    <ul><li>60 requests per minute</li><li>100,000 tokens per hour</li><li>$10 maximum cost per session</li><li>1 second cooldown between requests</li></ul>
+    <ul>
+      <li>60 requests per minute</li>
+      <li>100,000 tokens per hour</li>
+      <li>$10 maximum cost per session</li>
+      <li>1 second cooldown between requests</li>
+    </ul>
     <p>Check status with <code>/rate-limit</code>.</p>
 
     <h2 id="security">Security</h2>
     <p>Localcode includes comprehensive security checks for shell commands:</p>
-    <ul><li>Blocked commands: <code>rm -rf /</code>, <code>mkfs</code>, <code>dd</code>, <code>shutdown</code>, <code>reboot</code>, curl/wget pipe to sh, fork bombs</li><li>Suspicious pattern detection: eval(), exec(), system(), encoded content</li><li>File access monitoring for sensitive paths (/etc/passwd, .ssh/, .env)</li><li>Command length limits to prevent obfuscation</li></ul>
+    <ul>
+      <li><strong>Blocked commands:</strong> <code>rm -rf /</code>, <code>mkfs</code>, <code>dd</code>, <code>shutdown</code>, <code>reboot</code>, curl/wget pipe to sh, fork bombs</li>
+      <li><strong>Suspicious patterns:</strong> eval(), exec(), system(), encoded content</li>
+      <li><strong>File access monitoring:</strong> /etc/passwd, .ssh/, .env, AWS_SECRET, PRIVATE_KEY</li>
+      <li><strong>Command length limits:</strong> Commands over 10KB are flagged as potential obfuscation</li>
+    </ul>
+
+    <h2 id="benchmarks">Benchmarks</h2>
+    <p>Run performance benchmarks with <code>/benchmarks</code> or <code>localcode --benchmarks</code>:</p>
+    <ul>
+      <li>File read (10KB)</li>
+      <li>File write (10KB)</li>
+      <li>JSON parse</li>
+      <li>String operations</li>
+      <li>Array operations</li>
+      <li>Regex match</li>
+      <li>Path resolution</li>
+    </ul>
+    <p>Results are saved to <code>benchmarks.md</code> in your working directory.</p>
   </main>
 </div>
 
-<footer><div class="container"><div class="footer-grid"><div class="footer-col"><h4>Localcode</h4><p>The open-source AI coding agent by TheAlxLabs.</p></div><div class="footer-col"><h4>Product</h4><a href="/features">Features</a><a href="/why">Why Localcode</a><a href="/testing">Testing</a><a href="/agents">Agents</a></div><div class="footer-col"><h4>Resources</h4><a href="/docs">Documentation</a><a href="https://github.com/thealxlabs/localcode/blob/main/CONTRIBUTING.md">Contributing</a><a href="https://github.com/thealxlabs/localcode/blob/main/SECURITY.md">Security</a></div><div class="footer-col"><h4>Connect</h4><a href="https://github.com/thealxlabs/localcode">GitHub</a><a href="#">Discord</a><a href="mailto:hello@thealxlabs.com">Contact</a></div></div><div class="footer-bottom"><p>&copy; 2026 TheAlxLabs. MIT License.</p></div></div></footer>
+<footer><div class="container"><div class="footer-grid"><div class="footer-col"><h4>Localcode</h4><p>The open-source AI coding agent by TheAlxLabs.</p></div><div class="footer-col"><h4>Product</h4><a href="/features">Features</a><a href="/why">Why Localcode</a><a href="/testing">Testing</a><a href="/agents">Agents</a></div><div class="footer-col"><h4>Resources</h4><a href="/docs">Documentation</a><a href="https://github.com/thealxlabs/localcode/blob/main/CONTRIBUTING.md">Contributing</a><a href="https://github.com/thealxlabs/localcode/blob/main/SECURITY.md">Security</a></div><div class="footer-col"><h4>Connect</h4><a href="https://github.com/thealxlabs/localcode">GitHub</a><a href="#">Discord</a><a href="mailto:hello@thealxlabs.com">Contact</a></div></div><div class="footer-bottom"><p>&copy; 2026 TheAlxLabs. MIT License. <a href="https://localcode.thealxlabs.ca">localcode.thealxlabs.ca</a></p></div></div></footer>
 <script src="../js/main.js"></script>
 </body>
 </html>
