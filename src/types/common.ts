@@ -1,6 +1,8 @@
 // src/types/common.ts
 // Common types shared across domains
 
+import type { Provider } from './providers.js';
+
 export type ApprovalMode = 'suggest' | 'auto-edit' | 'full-auto';
 
 export type NyxMood = 'idle' | 'thinking' | 'happy' | 'error' | 'waiting';
@@ -12,7 +14,7 @@ export interface ModelRouting {
 }
 
 export interface ProviderCallEntry {
-  provider: string;
+  provider: Provider;
   model: string;
   estimatedTokens: number;
   timestamp: number;
