@@ -3,156 +3,44 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Install — Localcode</title>
-  <meta name="description" content="Install Localcode in 30 seconds. Free with Ollama, or connect any cloud provider."/>
+  <title>Features — Localcode</title>
+  <meta name="description" content="Explore Localcode's features: 139 agents, multi-agent orchestration, local LLM support, plugins, hooks, MCP, and more."/>
   <link rel="icon" type="image/png" href="assets/favicon.png"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="css/style.css"/>
 </head>
 <body>
-<div class="hero-bg"></div>
-<div class="hero-glow"></div>
-
+<div class="hero-bg"></div><div class="hero-glow"></div>
 <nav id="nav">
   <div class="nav-inner">
-    <a class="nav-logo" href="index.html">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-        <path d="M2 17l10 5 10-5"/>
-        <path d="M2 12l10 5 10-5"/>
-      </svg>
-      <span>Localcode</span>
-      <span class="nav-ver">v4.0.0</span>
-    </a>
-    <ul class="nav-links">
-      <li><a href="index.html">Home</a></li>
-      <li><a href="/features">Features</a></li>
-      <li><a href="/platforms">Platforms</a></li>
-      <li><a href="/agents">Agents</a>
-    <a href="/docs">Docs</a></li>
-      <li><a href="/docs">Docs</a></li>
-      <li><a href="https://github.com/thealxlabs/localcode" target="_blank">GitHub</a></li>
-      <li><a href="https://github.com/thealxlabs/localcode#readme" target="_blank">Docs</a></li>
-      <li><a href="/install" class="nav-cta">Install →</a></li>
-    </ul>
+    <a class="nav-logo" href="/"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg><span>Localcode</span></a>
+    <div class="nav-links"><a href="/features" class="active">Features</a><a href="/why">Why Localcode</a><a href="/testing">Testing</a><a href="/agents">Agents</a><a href="/docs">Docs</a><a href="https://github.com/thealxlabs/localcode" target="_blank">GitHub</a></div>
+    <div class="nav-actions"><a href="https://github.com/thealxlabs/localcode" class="btn btn-secondary">GitHub</a><a href="/install" class="btn btn-primary">Get Localcode</a></div>
   </div>
 </nav>
-
-<div class="page-header">
-  <div class="container">
-    <div class="section-label">Install</div>
-    <h1>Get Localcode</h1>
-    <p class="page-sub">Open source. Local-first. 139 agents. Ready in 30 seconds.</p>
+<div class="container" style="padding-top:100px;padding-bottom:6rem">
+  <div class="section-label">Features</div>
+  <h1 style="font-size:clamp(2rem,4vw,3.5rem);font-weight:900;letter-spacing:-.04em;margin-bottom:1rem">Everything you need.<br>Nothing you don't.</h1>
+  <p style="color:var(--text-muted);font-size:1rem;line-height:1.7;max-width:600px;margin-bottom:3rem">Localcode packs every feature a serious developer needs.</p>
+  <div class="feature-grid" style="margin-bottom:4rem">
+    <div class="feature"><span class="feature-icon">◉</span><h3>100% Local with Ollama</h3><p>Run any Ollama model. No API key. No cloud. Your code never leaves your machine. Free forever.</p><span class="ftag">Free forever</span></div>
+    <div class="feature"><span class="feature-icon">🤖</span><h3>139 Specialized Agents</h3><p>From AI engineers to security auditors, database optimizers to DevOps automators. Each with deep domain expertise.</p><span class="ftag">Auto-dispatch</span></div>
+    <div class="feature"><span class="feature-icon">🌐</span><h3>Multi-Agent Orchestration</h3><p>NEXUS pipeline coordinates multiple agents through 7 phases with quality gates, Dev↔QA loops, parallel execution.</p><span class="ftag">NEXUS</span></div>
+    <div class="feature"><span class="feature-icon">🔧</span><h3>10 Built-in Tools</h3><p>Read/write/patch/delete/move files, run shell commands, list directories, search, find, git operations.</p><span class="ftag">Full toolset</span></div>
+    <div class="feature"><span class="feature-icon">🔒</span><h3>Permission System</h3><p>Every file write, patch, or shell command asks first. Configurable per-tool and per-command pattern.</p><span class="ftag">Safety first</span></div>
+    <div class="feature"><span class="feature-icon">⧉</span><h3>Multi-Provider Support</h3><p>Ollama, OpenAI, Anthropic, Groq. Switch mid-session. Budget guard auto-falls back to local when limits hit.</p><span class="ftag">Flexibility</span></div>
+    <div class="feature"><span class="feature-icon">🔌</span><h3>Plugin System</h3><p>Drop a .js file in ~/.localcode/plugins/ to add custom slash commands. Zero boilerplate.</p><span class="ftag">Extensible</span></div>
+    <div class="feature"><span class="feature-icon">⚡</span><h3>Hooks</h3><p>PreToolUse, PostToolUse, and Notification hooks — run custom scripts before or after any tool call.</p><span class="ftag">Automation</span></div>
+    <div class="feature"><span class="feature-icon">📡</span><h3>MCP Servers</h3><p>Connect Model Context Protocol servers — both stdio and HTTP transports supported.</p><span class="ftag">Extensible</span></div>
+    <div class="feature"><span class="feature-icon">🧠</span><h3>Memory System</h3><p>.localcode.md for global and project memory. Both loaded automatically at startup.</p><span class="ftag">Persistent context</span></div>
+    <div class="feature"><span class="feature-icon">🔍</span><h3>TF-IDF Search</h3><p>/index builds a full semantic index of your project for smart context retrieval.</p><span class="ftag">Smart context</span></div>
+    <div class="feature"><span class="feature-icon">🎨</span><h3>4 Built-in Themes</h3><p>Dark, Light, Monokai, Nord. Switch with /theme.</p><span class="ftag">Customizable</span></div>
   </div>
+  <div style="text-align:center"><a href="/install" class="btn btn-primary btn-lg">Get Started →</a></div>
 </div>
-
-<section class="install-detail">
-  <div class="container">
-    <div class="install-methods">
-      <div class="imethod">
-        <div class="imethod-label">Global install (recommended)</div>
-        <div class="ibox">
-          <span class="icmd">npm install -g @localcode/cli</span>
-          <button class="cpbtn" onclick="cp(this,'npm install -g @localcode/cli')">copy</button>
-        </div>
-        <div class="imethod-note">Installs the <code>localcode</code> command globally.</div>
-      </div>
-      <div class="imethod">
-        <div class="imethod-label">No install needed</div>
-        <div class="ibox">
-          <span class="icmd">npx @localcode/cli</span>
-          <button class="cpbtn" onclick="cp(this,'npx @localcode/cli')">copy</button>
-        </div>
-        <div class="imethod-note">Runs directly via npx. No global install required.</div>
-      </div>
-    </div>
-
-    <div class="install-steps">
-      <div class="install-step">
-        <div class="is-num">1</div>
-        <div class="is-content">
-          <h3>Install</h3>
-          <p>Run the install command above. Node.js 18+ is required.</p>
-        </div>
-      </div>
-      <div class="install-step">
-        <div class="is-num">2</div>
-        <div class="is-content">
-          <h3>Launch</h3>
-          <p>Run <code>localcode</code> in your terminal. The setup wizard will guide you through provider selection.</p>
-        </div>
-      </div>
-      <div class="install-step">
-        <div class="is-num">3</div>
-        <div class="is-content">
-          <h3>Choose your provider</h3>
-          <p>Pick Ollama for free local AI, or connect OpenAI, Anthropic, or Groq with your API key.</p>
-        </div>
-      </div>
-      <div class="install-step">
-        <div class="is-num">4</div>
-        <div class="is-content">
-          <h3>Start coding</h3>
-          <p>Describe what you need. Localcode reads your codebase, makes changes, runs tests, and ships.</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="providers-list">
-      <h3>Supported providers</h3>
-      <div class="provider-cards">
-        <div class="provider-card">
-          <div class="pc-icon">◉</div>
-          <h4>Ollama</h4>
-          <p>Free · Fully local · No API key</p>
-          <span class="pc-models">qwen2.5-coder · llama3.2 · deepseek-r1 · mistral</span>
-        </div>
-        <div class="provider-card">
-          <div class="pc-icon">✶</div>
-          <h4>OpenAI</h4>
-          <p>OPENAI_API_KEY</p>
-          <span class="pc-models">gpt-4o · gpt-4o-mini · o1 · o3</span>
-        </div>
-        <div class="provider-card">
-          <div class="pc-icon">◆</div>
-          <h4>Anthropic</h4>
-          <p>ANTHROPIC_API_KEY</p>
-          <span class="pc-models">claude-sonnet-4 · claude-opus-4 · claude-haiku-4</span>
-        </div>
-        <div class="provider-card">
-          <div class="pc-icon">◈</div>
-          <h4>Groq</h4>
-          <p>GROQ_API_KEY · Free tier</p>
-          <span class="pc-models">llama-3.3-70b · mixtral-8x7b · gemma2-9b</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="req-row">
-      <span class="req-item">Node.js 18+</span>
-      <span class="req-item">macOS · Linux · WSL</span>
-      <span class="req-item">MIT License</span>
-      <span class="req-item">TypeScript source</span>
-      <span class="req-item">0 telemetry</span>
-    </div>
-  </div>
-</section>
-
-<footer>
-  <div class="footer-links">
-    <span><a href="index.html" style="color:var(--text-secondary)">Localcode</a> v4.0.0</span>
-    <a href="/features">Features</a>
-    <a href="/platforms">Platforms</a>
-    <a href="/agents">Agents</a>
-    <a href="/docs">Docs</a>
-    <a href="https://github.com/thealxlabs/localcode" target="_blank">⎇ GitHub</a>
-    <a href="https://npmjs.com/package/@localcode/cli" target="_blank">npm</a>
-  </div>
-  <span>Built by <a href="https://github.com/thealxlabs" target="_blank">TheAlxLabs</a> · MIT License</span>
-</footer>
-
+<footer><div class="container"><div class="footer-grid"><div class="footer-col"><h4>Localcode</h4><p>The open-source AI coding agent by TheAlxLabs.</p></div><div class="footer-col"><h4>Product</h4><a href="/features">Features</a><a href="/why">Why Localcode</a><a href="/testing">Testing</a><a href="/agents">Agents</a></div><div class="footer-col"><h4>Resources</h4><a href="/docs">Documentation</a><a href="https://github.com/thealxlabs/localcode/blob/main/CONTRIBUTING.md">Contributing</a><a href="https://github.com/thealxlabs/localcode/blob/main/SECURITY.md">Security</a></div><div class="footer-col"><h4>Connect</h4><a href="https://github.com/thealxlabs/localcode">GitHub</a><a href="#">Discord</a><a href="mailto:hello@thealxlabs.com">Contact</a></div></div><div class="footer-bottom"><p>&copy; 2026 TheAlxLabs. MIT License.</p></div></div></footer>
 <script src="js/main.js"></script>
 </body>
 </html>
