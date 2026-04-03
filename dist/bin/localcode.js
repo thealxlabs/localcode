@@ -8,6 +8,7 @@ import { loadSession, isFirstRun } from '../sessions/manager.js';
 import { createRequire } from 'module';
 import { trackSessionStart, trackSessionEnd, flushTelemetry, trackError } from '../telemetry/index.js';
 import { runAllBenchmarks, formatBenchmark, generateBenchmarkReport } from '../benchmarks/index.js';
+import { logger } from '../core/logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
 const _require = createRequire(import.meta.url);
@@ -177,7 +178,9 @@ waitUntilExit()
         saveSession(loadSession());
         flushTelemetry();
     }
-    catch { /* exit regardless */ }
+    catch (err) {
+        logger.error('Exit cleanup failed', { error: err instanceof Error ? err.message : String(err) });
+    }
     process.exit(0);
 })
     .catch((err) => {
@@ -191,7 +194,9 @@ process.on('beforeExit', () => {
         saveSession(loadSession());
         flushTelemetry();
     }
-    catch { /* non-critical */ }
+    catch (err) {
+        logger.error('Non-critical operation failed', { error: err instanceof Error ? err.message : String(err) });
+    }
 });
 process.on('uncaughtException', (err) => {
     trackError(err, { context: 'uncaughtException' });

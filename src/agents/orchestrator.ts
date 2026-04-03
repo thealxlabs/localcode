@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 import type { AgentDefinition } from './registry/types.js'
 import type { Message, Provider, ToolCall } from '../core/types.js'
 import { getAgentRegistry } from './registry/loader.js'
@@ -154,7 +155,7 @@ export class AgentOrchestrator {
           const parsed = JSON.parse(match[0]) as string[]
           if (parsed.length >= 2) subtasks = parsed
         }
-      } catch { /* use original task */ }
+      } catch (err) { logger.warn('Task decomposition failed', { error: err instanceof Error ? err.message : String(err) }); }
     }
 
     // Phase 2: Run primary agent on first subtask
@@ -285,7 +286,7 @@ export class AgentOrchestrator {
           (chunk) => { if (chunk.text) synthesis += chunk.text },
           systemPromptBase,
         )
-      } catch { /* synthesis may fail, continue anyway */ }
+      } catch (err) { logger.warn('Synthesis failed', { error: err instanceof Error ? err.message : String(err) }); }
 
       if (synthesis) {
         this.state.completedTasks.push({

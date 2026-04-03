@@ -1,77 +1,57 @@
 // src/security/index.ts
-// Security audit and sandboxing for shell commands
+// Whitelist-based command security classification
 
-import { execFile } from 'child_process';
+import { logger } from '../core/logger.js';
 
-export interface SecurityCheck {
-  passed: boolean;
-  severity: 'critical' | 'high' | 'medium' | 'low';
-  message: string;
-  command?: string;
-}
+// Whitelist of allowed command prefixes
+const ALLOWED_COMMANDS = new Set([
+  // Version control
+  'git',
+  // Package managers
+  'npm', 'npx', 'yarn', 'pnpm', 'bun',
+  // Languages/runtimes
+  'node', 'python', 'python3', 'ruby', 'go', 'rustc', 'cargo',
+  // File operations
+  'ls', 'cat', 'head', 'tail', 'wc', 'find', 'tree', 'pwd', 'basename', 'dirname', 'file', 'stat', 'echo',
+  // Text processing
+  'grep', 'sed', 'awk', 'sort', 'uniq', 'cut', 'tr', 'diff', 'comm', 'patch',
+  // Archive
+  'tar', 'zip', 'unzip', 'gzip', 'gunzip',
+  // System info
+  'whoami', 'date', 'uname', 'hostname', 'uptime', 'df', 'du', 'free', 'top', 'ps',
+  // Build tools
+  'make', 'cmake', 'gcc', 'g++', 'clang', 'clang++',
+  // Testing
+  'jest', 'mocha', 'vitest', 'pytest', 'go', 'cargo',
+  // Linting/formatting
+  'eslint', 'prettier', 'flake8', 'black', 'gofmt',
+  // Misc dev tools
+  'curl', 'wget', 'ssh', 'scp', 'rsync', 'docker', 'docker-compose',
+  // Safe chmod (non-recursive, non-777)
+  'chmod', 'chown',
+  // Directory operations
+  'mkdir', 'touch', 'cp', 'mv', 'rm',
+  // Network
+  'ping', 'dig', 'nslookup', 'netstat', 'ss',
+  // Documentation
+  'man', 'info', 'help',
+]);
 
-// Comprehensive list of blocked commands and patterns
-const BLOCKED_COMMANDS = [
-  // Filesystem destruction
-  'rm -rf /',
-  'rm -rf /*',
-  'rm -rf ~',
-  'rm -rf $HOME',
-  'mkfs',
-  'mkfs.',
-  'dd if=',
-  'dd of=',
-  '> /dev/sda',
-  '> /dev/disk',
+// Commands that are always blocked regardless of context
+const BLOCKED_COMMANDS = new Set([
+  'rm -rf /', 'rm -rf /*', 'rm -rf ~', 'rm -rf $HOME',
+  'mkfs', 'mkfs.', 'dd if=', 'dd of=',
+  '> /dev/sda', '> /dev/disk',
+  'shutdown', 'reboot', 'halt', 'poweroff', 'init 0', 'init 6',
+  'systemctl poweroff', 'systemctl reboot',
+  'chmod -R 777 /', 'chmod -R 777 /*', 'chmod -R 777 ~', 'chmod -R 777 $HOME',
+  ':(){:|:&};:', 'forkbomb',
+  'kill -9 1', 'kill -9 -1',
+  'curl * | sh', 'curl *|sh', 'curl * | bash', 'curl *|bash',
+  'wget * | sh', 'wget *|sh', 'wget * | bash', 'wget *|bash',
+]);
 
-  // System control
-  'shutdown',
-  'reboot',
-  'halt',
-  'poweroff',
-  'init 0',
-  'init 6',
-  'systemctl poweroff',
-  'systemctl reboot',
-
-  // Privilege escalation
-  'chmod -R 777 /',
-  'chmod -R 777 /*',
-  'chmod -R 777 ~',
-  'chmod -R 777 $HOME',
-  'chown -R',
-  'sudo',
-  'su -',
-
-  // Network attacks
-  'curl * | sh',
-  'curl *|sh',
-  'curl * | bash',
-  'curl *|bash',
-  'wget * | sh',
-  'wget *|sh',
-  'wget * | bash',
-  'wget *|bash',
-
-  // Fork bombs
-  ':(){:|:&};:',
-  'forkbomb',
-
-  // Data exfiltration
-  'scp * @',
-  'rsync * @',
-  'nc -l',
-  'ncat -l',
-  'socat',
-
-  // Process manipulation
-  'kill -9 1',
-  'kill -9 -1',
-  'killall',
-  'pkill -9',
-];
-
-// Patterns that require additional scrutiny
+// Suspicious patterns that require extra scrutiny
 const SUSPICIOUS_PATTERNS = [
   /eval\s*\(/,
   /exec\s*\(/,
@@ -88,139 +68,118 @@ const SUSPICIOUS_PATTERNS = [
   /token/i,
 ];
 
-/**
- * Check if a command is safe to execute.
- */
-export function checkCommandSafety(command: string): SecurityCheck[] {
-  const checks: SecurityCheck[] = [];
-  const normalizedCommand = command.toLowerCase().replace(/\s+/g, ' ').trim();
+export interface CommandClassification {
+  allowed: boolean;
+  reason: string;
+  severity: 'safe' | 'review' | 'blocked';
+  command: string;
+  baseCommand: string;
+}
 
-  // Check blocked commands
+/**
+ * Extract the base command from a command string.
+ * Handles pipes, redirects, and subshells.
+ */
+function extractBaseCommand(command: string): string {
+  // Get the first command before any pipe or redirect
+  const base = command.split(/[\|;&]/)[0].trim();
+  // Get the first word (the actual command)
+  const parts = base.split(/\s+/);
+  return parts[0] || '';
+}
+
+/**
+ * Classify a command using whitelist-based approach.
+ */
+export function classifyCommand(command: string): CommandClassification {
+  const normalizedCommand = command.toLowerCase().replace(/\s+/g, ' ').trim();
+  const baseCommand = extractBaseCommand(command);
+
+  // Check blocked commands first (highest priority)
   for (const blocked of BLOCKED_COMMANDS) {
     const normalizedBlocked = blocked.toLowerCase().replace(/\s+/g, ' ');
-    // Handle wildcard patterns
     if (normalizedBlocked.includes('*')) {
       const pattern = normalizedBlocked.replace(/\*/g, '.*');
       if (new RegExp(pattern).test(normalizedCommand)) {
-        checks.push({
-          passed: false,
-          severity: 'critical',
-          message: `Command matches blocked pattern: "${blocked}"`,
+        return {
+          allowed: false,
+          reason: `Command matches blocked pattern: "${blocked}"`,
+          severity: 'blocked',
           command,
-        });
+          baseCommand,
+        };
       }
     } else if (normalizedCommand.includes(normalizedBlocked)) {
-      checks.push({
-        passed: false,
-        severity: 'critical',
-        message: `Command contains blocked pattern: "${blocked}"`,
+      return {
+        allowed: false,
+        reason: `Command contains blocked pattern: "${blocked}"`,
+        severity: 'blocked',
         command,
-      });
+        baseCommand,
+      };
     }
   }
 
   // Check suspicious patterns
   for (const pattern of SUSPICIOUS_PATTERNS) {
     if (pattern.test(command)) {
-      checks.push({
-        passed: false,
-        severity: 'high',
-        message: `Command contains suspicious pattern: ${pattern.source}`,
+      return {
+        allowed: false,
+        reason: `Command contains suspicious pattern: ${pattern.source}`,
+        severity: 'blocked',
         command,
-      });
+        baseCommand,
+      };
     }
   }
 
-  // Check command length (very long commands might be obfuscated)
-  if (command.length > 10000) {
-    checks.push({
-      passed: false,
-      severity: 'medium',
-      message: 'Command is unusually long (>10KB), possible obfuscation',
-      command: command.slice(0, 100) + '...',
-    });
-  }
-
-  // Check for encoded content
-  if (/base64\s+-d/.test(command) || /\\x[0-9a-f]{2}/.test(command)) {
-    checks.push({
-      passed: false,
-      severity: 'high',
-      message: 'Command contains encoded content',
+  // Check whitelist
+  if (ALLOWED_COMMANDS.has(baseCommand)) {
+    return {
+      allowed: true,
+      reason: `Command "${baseCommand}" is in the allowed list`,
+      severity: 'safe',
       command,
-    });
+      baseCommand,
+    };
   }
 
-  // If no issues found, command is safe
-  if (checks.length === 0) {
-    checks.push({
-      passed: true,
-      severity: 'low',
-      message: 'Command passed security checks',
-      command,
-    });
-  }
-
-  return checks;
+  // Not in whitelist - requires review
+  return {
+    allowed: false,
+    reason: `Command "${baseCommand}" is not in the allowed list. Requires explicit approval.`,
+    severity: 'review',
+    command,
+    baseCommand,
+  };
 }
 
 /**
- * Check if a command is safe (convenience method).
+ * Get a human-readable classification summary.
  */
-export function isCommandSafe(command: string): boolean {
-  const checks = checkCommandSafety(command);
-  return checks.every(c => c.passed);
+export function getCommandClassification(command: string): string {
+  const classification = classifyCommand(command);
+  const icon = classification.severity === 'safe' ? '✓' : classification.severity === 'blocked' ? '✗' : '?';
+  return `${icon} ${classification.reason}`;
 }
 
 /**
- * Get a summary of security checks.
+ * Check if a command is allowed without requiring user approval.
  */
-export function getSecuritySummary(command: string): string {
-  const checks = checkCommandSafety(command);
-  const failed = checks.filter(c => !c.passed);
-  const critical = failed.filter(c => c.severity === 'critical');
-  const high = failed.filter(c => c.severity === 'high');
-
-  if (critical.length > 0) {
-    return `BLOCKED: ${critical.length} critical issue(s) found`;
-  }
-  if (high.length > 0) {
-    return `WARNING: ${high.length} high-severity issue(s) found`;
-  }
-  if (failed.length > 0) {
-    return `CAUTION: ${failed.length} issue(s) found`;
-  }
-  return 'SAFE: Command passed all security checks';
+export function isCommandAllowed(command: string): boolean {
+  return classifyCommand(command).allowed;
 }
 
 /**
- * Run a command with security checks.
+ * Get the list of allowed commands (for display in help/settings).
  */
-export function runSafeCommand(
-  command: string,
-  cwd: string,
-  timeout: number = 30000,
-): Promise<{ success: boolean; output: string; checks: SecurityCheck[] }> {
-  const checks = checkCommandSafety(command);
-  const isSafe = checks.every(c => c.passed);
+export function getAllowedCommands(): string[] {
+  return [...ALLOWED_COMMANDS].sort();
+}
 
-  if (!isSafe) {
-    const criticalIssues = checks.filter(c => !c.passed).map(c => c.message).join('; ');
-    return Promise.resolve({
-      success: false,
-      output: `Command blocked by security check: ${criticalIssues}`,
-      checks,
-    });
-  }
-
-  return new Promise((resolve) => {
-    execFile('sh', ['-c', command], { cwd, timeout, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const output = [stdout, stderr].filter(Boolean).join('\n').trim();
-      if (err) {
-        resolve({ success: false, output: output || err.message, checks });
-      } else {
-        resolve({ success: true, output: output || '(no output)', checks });
-      }
-    });
-  });
+/**
+ * Get the list of blocked patterns (for display in help/settings).
+ */
+export function getBlockedPatterns(): string[] {
+  return [...BLOCKED_COMMANDS].sort();
 }

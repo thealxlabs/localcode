@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -49,7 +50,7 @@ export function saveHistory(entries: string[]): void {
     ensureDir();
     const toSave = entries.slice(0, MAX_HISTORY);
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(toSave, null, 2), 'utf8');
-  } catch { /* non-critical */ }
+  } catch (err) { logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) }); }
 }
 
 export function loadHistory(): string[] {
@@ -84,7 +85,7 @@ export function saveTemplates(templates: PromptTemplate[]): void {
   try {
     ensureDir();
     fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(templates, null, 2), 'utf8');
-  } catch { /* non-critical */ }
+  } catch (err) { logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) }); }
 }
 
 // ── Aliases ───────────────────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ export function saveAliases(aliases: Record<string, string>): void {
   try {
     ensureDir();
     fs.writeFileSync(ALIASES_FILE, JSON.stringify(aliases, null, 2), 'utf8');
-  } catch { /* non-critical */ }
+  } catch (err) { logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) }); }
 }
 
 // ── Session ───────────────────────────────────────────────────────────────────
@@ -252,7 +253,7 @@ export function saveSession(state: SessionState): void {
       for (const { f } of files.slice(50)) {
         try { fs.unlinkSync(path.join(SESSIONS_DIR, f)); } catch { /* ok */ }
       }
-    } catch { /* non-critical */ }
+    } catch (err) { logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) }); }
   }
 }
 

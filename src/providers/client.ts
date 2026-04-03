@@ -272,7 +272,7 @@ async function runOllamaAgent(
               toolCalls.push({ name: tc.function.name, args: tc.function.arguments ?? {} });
             }
           }
-        } catch { /* skip */ }
+        } catch (err) { logger.debug('Stream chunk parse failed', { error: err instanceof Error ? err.message : String(err) }); }
       }
     }
 
@@ -414,7 +414,7 @@ async function runClaudeAgent(
           } else if (ev.type === 'message_delta') {
             stopReason = ev.delta?.stop_reason ?? '';
           }
-        } catch { /* skip */ }
+        } catch (err) { logger.debug('Stream chunk parse failed', { error: err instanceof Error ? err.message : String(err) }); }
       }
     }
 
@@ -435,7 +435,7 @@ async function runClaudeAgent(
     for (const tu of toolUses) {
       if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
       let parsedInput: Record<string, unknown> = {};
-      try { parsedInput = JSON.parse(tu.input || '{}'); } catch { /* ok */ }
+      try { parsedInput = JSON.parse(tu.input || '{}'); } catch (err) { logger.debug('JSON parse failed', { error: err instanceof Error ? err.message : String(err) }); }
 
       const toolCall: ToolCall = { name: tu.name, args: parsedInput };
       const perm = await agentCfg.onToolCall(toolCall, step);
@@ -556,7 +556,7 @@ async function runOpenAIAgent(
               if (tc.function?.arguments) tcAccum[idx].args += tc.function.arguments;
             }
           }
-        } catch { /* skip */ }
+        } catch (err) { logger.debug('Stream chunk parse failed', { error: err instanceof Error ? err.message : String(err) }); }
       }
     }
 
@@ -576,7 +576,7 @@ async function runOpenAIAgent(
     for (const tc of toolCalls) {
       if (signal?.aborted) { await onChunk({ type: 'error', error: 'Cancelled.' }); return; }
       let args: Record<string, unknown> = {};
-      try { args = JSON.parse(tc.args || '{}'); } catch { /* ok */ }
+      try { args = JSON.parse(tc.args || '{}'); } catch (err) { logger.debug('JSON parse failed', { error: err instanceof Error ? err.message : String(err) }); }
 
       const toolCall: ToolCall = { name: tc.name, args };
       const perm = await agentCfg.onToolCall(toolCall, step);

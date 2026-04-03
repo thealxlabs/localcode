@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 // src/ui/App.tsx
 import React, { useState, useEffect, useRef, useCallback, Component } from 'react';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
@@ -180,7 +181,9 @@ export function App({ initialState }) {
                         sysMsg('Auto-context: injected git state (no .nyx.md found — run /init to create one)');
                     }
                 }
-                catch { /* not a git repo — that's fine */ }
+                catch (err) {
+                    logger.debug('Not a git repo', { error: err instanceof Error ? err.message : String(err) });
+                }
             };
             tryGitContext();
         }
@@ -233,7 +236,9 @@ export function App({ initialState }) {
                     execFile('sh', ['-c', hook.command], { env, timeout: 10000 }, () => resolve());
                 });
             }
-            catch { /* hooks never block the agent */ }
+            catch (err) {
+                logger.warn('Hook execution failed', { error: err instanceof Error ? err.message : String(err) });
+            }
         }
     }, []);
     // ── Slash command handler ─────────────────────────────────────────────────────
@@ -389,7 +394,9 @@ export function App({ initialState }) {
                                 try {
                                     saveSession(next);
                                 }
-                                catch { /* non-critical */ }
+                                catch (err) {
+                                    logger.error('Failed to save session', { error: err instanceof Error ? err.message : String(err) });
+                                }
                                 return next;
                             });
                         }
@@ -1493,7 +1500,9 @@ ${msgHtml}
                         }
                     }
                 }
-                catch { /* ok */ }
+                catch (err) {
+                    logger.warn('Operation failed', { error: err instanceof Error ? err.message : String(err) });
+                }
                 if (!testCmd && fs.existsSync(path.join(cwd, 'Cargo.toml'))) {
                     testCmd = 'cargo test';
                 }
@@ -2053,7 +2062,9 @@ ${msgHtml}
                 try {
                     saveSession(session);
                 }
-                catch { /* exit regardless */ }
+                catch (err) {
+                    logger.error('Exit cleanup failed', { error: err instanceof Error ? err.message : String(err) });
+                }
                 exit();
                 return;
             }
@@ -2344,7 +2355,9 @@ ${msgHtml}
                                     sysMsg(`⬡  Autopilot: committed changes triggered by ${filename}`);
                             }
                         }
-                        catch { /* non-critical */ }
+                        catch (err) {
+                            logger.error('Non-critical operation failed', { error: err instanceof Error ? err.message : String(err) });
+                        }
                     }, 2000);
                 });
                 return;
@@ -2748,7 +2761,9 @@ ${msgHtml}
             try {
                 saveSession(session);
             }
-            catch { /* exit regardless */ }
+            catch (err) {
+                logger.error('Exit cleanup failed', { error: err instanceof Error ? err.message : String(err) });
+            }
             exit();
         }
     });

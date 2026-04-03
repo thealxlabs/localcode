@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -32,7 +33,9 @@ export function saveHistory(entries) {
         const toSave = entries.slice(0, MAX_HISTORY);
         fs.writeFileSync(HISTORY_FILE, JSON.stringify(toSave, null, 2), 'utf8');
     }
-    catch { /* non-critical */ }
+    catch (err) {
+        logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) });
+    }
 }
 export function loadHistory() {
     try {
@@ -60,7 +63,9 @@ export function saveTemplates(templates) {
         ensureDir();
         fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(templates, null, 2), 'utf8');
     }
-    catch { /* non-critical */ }
+    catch (err) {
+        logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) });
+    }
 }
 // ── Aliases ───────────────────────────────────────────────────────────────────
 const ALIASES_FILE = path.join(SESSION_DIR, 'aliases.json');
@@ -79,7 +84,9 @@ export function saveAliases(aliases) {
         ensureDir();
         fs.writeFileSync(ALIASES_FILE, JSON.stringify(aliases, null, 2), 'utf8');
     }
-    catch { /* non-critical */ }
+    catch (err) {
+        logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) });
+    }
 }
 /** Load .nyx.md files from the global home dir and the project working dir. */
 export function loadNyxMemories(workingDir) {
@@ -220,7 +227,9 @@ export function saveSession(state) {
                 catch { /* ok */ }
             }
         }
-        catch { /* non-critical */ }
+        catch (err) {
+            logger.error('Session operation failed', { error: err instanceof Error ? err.message : String(err) });
+        }
     }
 }
 export function listSessions() {

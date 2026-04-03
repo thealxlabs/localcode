@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { logger } from '../core/logger.js';
-import { checkCommandSafety } from '../security/index.js';
+import { classifyCommand } from '../security/index.js';
 function buildDiff(filePath, before, after) {
     const beforeLines = before.split('\n');
     const afterLines = after.split('\n');
@@ -133,13 +133,18 @@ export class ToolExecutor {
     }
     runShell(args) {
         const cwd = args.cwd ? this.resolvePath(args.cwd) : this.workingDir;
-        // Run comprehensive security check
-        const securityResult = checkCommandSafety(args.command);
-        const isSafe = securityResult.every(c => c.passed);
-        if (!isSafe) {
-            const criticalIssues = securityResult.filter(c => !c.passed).map(c => c.message).join('; ');
-            logger.warn('Blocked dangerous command', { command: args.command.slice(0, 200), issues: criticalIssues });
-            return Promise.resolve({ success: false, output: `Security check failed: ${criticalIssues}` });
+        // Whitelist-based security classification
+        const classification = classifyCommand(args.command);
+        if (!classification.allowed) {
+            logger.warn('Command blocked by whitelist', {
+                command: args.command.slice(0, 200),
+                reason: classification.reason,
+                severity: classification.severity,
+            });
+            return Promise.resolve({
+                success: false,
+                output: `Command blocked: ${classification.reason}`,
+            });
         }
         return new Promise((resolve) => {
             execFile('sh', ['-c', args.command], { cwd, timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -205,7 +210,9 @@ export class ToolExecutor {
                     }
                 }
             }
-            catch { /* skip inaccessible dirs */ }
+            catch (err) {
+                logger.debug('Directory inaccessible', { error: err instanceof Error ? err.message : String(err) });
+            }
             return results;
         };
         try {
@@ -246,7 +253,9 @@ export class ToolExecutor {
                     }
                 }
             }
-            catch { /* skip inaccessible dirs */ }
+            catch (err) {
+                logger.debug('Directory inaccessible', { error: err instanceof Error ? err.message : String(err) });
+            }
             return results;
         };
         try {

@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 // src/agents/testloop.ts
 // Fix-until-green loop: detect test runner, run tests, feed failures to agent, repeat.
 
@@ -34,7 +35,7 @@ export async function detectTestCommand(cwd: string): Promise<string | null> {
       const deps = { ...p.devDependencies, ...p.dependencies };
       if (deps?.vitest) return 'npx vitest run';
       if (deps?.jest) return 'npx jest';
-    } catch { /* ok */ }
+    } catch (err) { logger.debug('Test detection failed', { error: err instanceof Error ? err.message : String(err) }); }
     return 'npm test';
   }
   if (fs.existsSync(path.join(cwd, 'pytest.ini')) || fs.existsSync(path.join(cwd, 'pyproject.toml'))) {

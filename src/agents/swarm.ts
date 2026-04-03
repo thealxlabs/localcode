@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 // src/agents/swarm.ts
 // Parallel agent swarm — splits a task into N subtasks and runs them concurrently.
 
@@ -49,7 +50,7 @@ export async function runSwarm(
   try {
     const match = raw.match(/\[[\s\S]*\]/);
     if (match) subtasks = JSON.parse(match[0]) as string[];
-  } catch { /* fall back */ }
+  } catch (err) { logger.warn('Task decomposition fallback', { error: err instanceof Error ? err.message : String(err) }); }
 
   if (!subtasks.length || subtasks.length < 2) {
     subtasks = raw.split('\n').map((l) => l.replace(/^[\d.\-\s]+/, '').trim()).filter(Boolean).slice(0, n);

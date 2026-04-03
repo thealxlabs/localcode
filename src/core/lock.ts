@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 // src/core/lock.ts
 // File locking for concurrent agent operations
 
@@ -41,7 +42,7 @@ export class FileLock {
           process.kill(pid, 0);
         } catch {
           // Process dead, remove stale lock
-          try { fs.unlinkSync(this.lockPath); } catch { /* ok */ }
+          try { fs.unlinkSync(this.lockPath); } catch (err) { logger.debug('Lock cleanup failed', { error: err instanceof Error ? err.message : String(err) }); }
         }
         await new Promise(r => setTimeout(r, 100));
       }
@@ -51,7 +52,7 @@ export class FileLock {
 
   release(): void {
     if (this.acquired) {
-      try { fs.unlinkSync(this.lockPath); } catch { /* ok */ }
+      try { fs.unlinkSync(this.lockPath); } catch (err) { logger.debug('Lock cleanup failed', { error: err instanceof Error ? err.message : String(err) }); }
       this.acquired = false;
     }
   }

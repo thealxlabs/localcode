@@ -229,7 +229,9 @@ async function runOllamaAgent(config, model, messages, onChunk, agentCfg, system
                         }
                     }
                 }
-                catch { /* skip */ }
+                catch (err) {
+                    logger.debug('Stream chunk parse failed', { error: err instanceof Error ? err.message : String(err) });
+                }
             }
         }
         history.push({ role: 'assistant', content: assistantText });
@@ -367,7 +369,9 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
                         stopReason = ev.delta?.stop_reason ?? '';
                     }
                 }
-                catch { /* skip */ }
+                catch (err) {
+                    logger.debug('Stream chunk parse failed', { error: err instanceof Error ? err.message : String(err) });
+                }
             }
         }
         const assistantContent = [];
@@ -396,7 +400,9 @@ async function runClaudeAgent(config, model, messages, onChunk, agentCfg, system
             try {
                 parsedInput = JSON.parse(tu.input || '{}');
             }
-            catch { /* ok */ }
+            catch (err) {
+                logger.debug('JSON parse failed', { error: err instanceof Error ? err.message : String(err) });
+            }
             const toolCall = { name: tu.name, args: parsedInput };
             const perm = await agentCfg.onToolCall(toolCall, step);
             let resultContent = 'Tool call denied by user.';
@@ -509,7 +515,9 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
                         }
                     }
                 }
-                catch { /* skip */ }
+                catch (err) {
+                    logger.debug('Stream chunk parse failed', { error: err instanceof Error ? err.message : String(err) });
+                }
             }
         }
         const toolCalls = Object.values(tcAccum);
@@ -535,7 +543,9 @@ async function runOpenAIAgent(baseUrl, apiKey, model, messages, onChunk, agentCf
             try {
                 args = JSON.parse(tc.args || '{}');
             }
-            catch { /* ok */ }
+            catch (err) {
+                logger.debug('JSON parse failed', { error: err instanceof Error ? err.message : String(err) });
+            }
             const toolCall = { name: tc.name, args };
             const perm = await agentCfg.onToolCall(toolCall, step);
             let resultContent = 'Tool call denied by user.';

@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 // src/ui/App.tsx
 
 import React, { useState, useEffect, useRef, useCallback, Component, type ReactNode } from 'react';
@@ -257,7 +258,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
             }));
             sysMsg('Auto-context: injected git state (no .nyx.md found — run /init to create one)');
           }
-        } catch { /* not a git repo — that's fine */ }
+        } catch (err) { logger.debug('Not a git repo', { error: err instanceof Error ? err.message : String(err) }); }
       };
       tryGitContext();
     }
@@ -324,7 +325,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
         await new Promise<void>((resolve) => {
           execFile('sh', ['-c', hook.command], { env, timeout: 10000 }, () => resolve());
         });
-      } catch { /* hooks never block the agent */ }
+      } catch (err) { logger.warn('Hook execution failed', { error: err instanceof Error ? err.message : String(err) }); }
     }
   }, []);
 
@@ -497,7 +498,7 @@ export function App({ initialState }: AppProps): React.ReactElement {
                       },
                     ],
                   };
-                  try { saveSession(next); } catch { /* non-critical */ }
+                  try { saveSession(next); } catch (err) { logger.error('Failed to save session', { error: err instanceof Error ? err.message : String(err) }); }
                   return next;
                 });
               }
@@ -1632,7 +1633,7 @@ ${msgHtml}
               testCmd = 'npm test';
             }
           }
-        } catch { /* ok */ }
+        } catch (err) { logger.warn('Operation failed', { error: err instanceof Error ? err.message : String(err) }); }
 
         if (!testCmd && fs.existsSync(path.join(cwd, 'Cargo.toml'))) {
           testCmd = 'cargo test';
@@ -2214,7 +2215,7 @@ ${msgHtml}
 
       case '/exit': {
         trackCommand(cmd, args);
-        try { saveSession(session); } catch { /* exit regardless */ }
+        try { saveSession(session); } catch (err) { logger.error('Exit cleanup failed', { error: err instanceof Error ? err.message : String(err) }); }
         exit();
         return;
       }
@@ -2478,7 +2479,7 @@ ${msgHtml}
                 const commitRes = await executorRef.current.execute({ name: 'git_operation', args: { args: `commit -m "autopilot: ${ts} — ${filename}"` } });
                 if (commitRes.success) sysMsg(`⬡  Autopilot: committed changes triggered by ${filename}`);
               }
-            } catch { /* non-critical */ }
+            } catch (err) { logger.error('Non-critical operation failed', { error: err instanceof Error ? err.message : String(err) }); }
           }, 2000);
         });
         return;
@@ -2893,7 +2894,7 @@ ${msgHtml}
     }
 
     if (key.ctrl && inputChar === 'c') {
-      try { saveSession(session); } catch { /* exit regardless */ }
+      try { saveSession(session); } catch (err) { logger.error('Exit cleanup failed', { error: err instanceof Error ? err.message : String(err) }); }
       exit();
     }
   });

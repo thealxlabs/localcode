@@ -1,3 +1,4 @@
+import { logger } from '../core/logger.js';
 // src/search/tfidf.ts
 // Simple TF-IDF file relevance scorer
 
@@ -206,7 +207,7 @@ export function search(query: string, index: SearchIndex, topK = 5): SearchResul
         }
       }
       if (!snippet && lines.length > 0) snippet = lines[0].trim().slice(0, 120);
-    } catch { /* ok */ }
+    } catch (err) { logger.debug('Search index load failed', { error: err instanceof Error ? err.message : String(err) }); }
 
     results.push({
       filePath,
